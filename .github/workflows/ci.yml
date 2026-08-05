@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test image (cached layers)
+        run: |
+          docker build -t mtls-hello-test -f - . <<'DOCKERFILE'
+          FROM debian:bookworm
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+                  ldc dub libssl-dev pkg-config gcc libc6-dev zlib1g-dev \
+                  bats curl git openssl \
+              && rm -rf /var/lib/apt/lists/* \
+              && ln -sf /usr/bin/gcc /usr/local/bin/cc
+          COPY . /src
+          WORKDIR /src
+          RUN DC=ldc2 dub build --compiler=ldc2
+          DOCKERFILE
+
+      - name: Run BATS tests
+        run: |
+          docker run --rm mtls-hello-test bats tests/
+
+  package-debian:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Debian package
+        run: |
+          docker build -t mtls-hello-build-debian -f docker/Dockerfile.debian .
+          mkdir -p dist
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+            -v mtls-dub-deb:/root/.dub mtls-hello-build-debian
+
+      - name: Verify .deb
+        run: |
+          dpkg-deb -I dist/mtls-hello_*.deb
+          dpkg-deb -c dist/mtls-hello_*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: dist/mtls-hello_*.deb
+
+  package-arch:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Arch package
+        run: |
+          docker build -t mtls-hello-build-arch -f docker/Dockerfile.arch .
+          mkdir -p dist
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+            -v mtls-dub-arch:/root/.dub mtls-hello-build-arch
+
+      - name: Verify .pkg
+        run: |
+          tar -I zstd -tf dist/mtls-hello-*.pkg.tar.zst
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: dist/mtls-hello-*.pkg.tar.zst
