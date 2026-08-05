@@ -757,6 +757,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just install copies binary and handlers to ~/.local" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -778,6 +780,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just install is idempotent" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -795,6 +799,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just install creates missing ~/.local directories" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
   rm -rf "$home_dir/.local"
@@ -810,6 +816,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just install generates self-signed server cert" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -832,6 +840,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just install does not overwrite existing certs" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
   mkdir -p "$home_dir/.local/share/mtls-hello/certs/certs" \
@@ -856,6 +866,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just install warns and skips when openssl is missing" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir fake_bin
   home_dir="$(mktemp -d)"
   fake_bin="$(mktemp -d)"
@@ -973,6 +985,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US3: just install-service creates a valid systemd user unit" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -1001,6 +1015,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US3: just install-service refuses without prior install" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -1194,6 +1210,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just self-extract produces a named script" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   [ -n "$(get_self_extract_installer)" ]
   [ -f "$(get_self_extract_installer)" ]
   [ -x "$(get_self_extract_installer)" ]
@@ -1201,6 +1219,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: just self-extract adds -dirty on unclean tree" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local dirty_file="$PWD/mtls-dirty-test.tmp"
   touch "$dirty_file"
   LD_LIBRARY_PATH="" run just self-extract
@@ -1214,6 +1234,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US1: self-extracting script --help prints usage" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   run bash "$(get_self_extract_installer)" --help
   [ "$status" -eq 0 ]
   echo "$output" | grep -qi "install"
@@ -1221,6 +1243,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US2: installer install subcommand works" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -1248,6 +1272,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US2: installer install does not overwrite existing certs" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
   mkdir -p "$home_dir/.local/share/mtls-hello/certs/certs" \
@@ -1272,6 +1298,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US2: installer install warns but succeeds without openssl" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir fake_bin
   home_dir="$(mktemp -d)"
   fake_bin="$(mktemp -d)"
@@ -1289,6 +1317,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US3: installer install-service creates a valid unit" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
@@ -1314,6 +1344,8 @@ mkfixture_bare_symlinked() {
 }
 
 @test "US3: installer install-service refuses without prior install" {
+
+  command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
 
