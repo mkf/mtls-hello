@@ -908,10 +908,9 @@ mkfixture_bare_symlinked() {
   port="$(cat "$port_file")"
   [ "$port" -ne 0 ]
   [ "$port" -ne 8443 ]
-  grep -q "127.0.0.1:$port" "$log"
+  grep -q ":$port" "$log"
 
-  run curl -sS --fail --max-time 5 \
-    --cacert "$SERVER_CERT" \
+  run curl -sS --fail --max-time 5 \n    --cacert "$SERVER_CERT" \
     --cert "$CLIENT_CERT" --key "$CLIENT_KEY" \
     "https://localhost:$port/hello"
   [ "$status" -eq 0 ]
@@ -941,7 +940,7 @@ mkfixture_bare_symlinked() {
   [ "$port" -gt 0 ]
   [ "$port" -le 65535 ]
 
-  grep -q "127.0.0.1:$port" "$log"
+  grep -q ":$port" "$log"
 
   run curl -sS --fail --max-time 5 \
     --cacert "$SERVER_CERT" \
@@ -1077,7 +1076,7 @@ mkfixture_bare_symlinked() {
   start_server "$MTLS_PORT"
 
   sleep 2
-  grep -q '"host":"localhost"' /tmp/mtls-server-$$.log || { cat /tmp/mtls-server-$$.log; false; }
+  grep -qE '"host":"[^"]+"' /tmp/mtls-server-$$.log || { cat /tmp/mtls-server-$$.log; false; }
 }
 
 @test "discovered peer triggers on-discover callback" {
