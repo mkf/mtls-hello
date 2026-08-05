@@ -20,7 +20,7 @@ jobs:
 
       - name: Build binary and run tests
         run: |
-          docker run --rm mtls-hello-test bash -c '
+          docker run --rm -v "$PWD:/src:ro" -v mtls-dub-test:/root/.dub mtls-hello-test bash -c '
             cp -a /src /build && cd /build && rm -rf .dub
             DC=ldc2 dub build --compiler=ldc2
             bats tests/
