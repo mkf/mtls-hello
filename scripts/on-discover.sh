@@ -45,7 +45,7 @@ mtls_curl_post() {
 # or extract the CN from an existing cert file.
 ensure_peer_host() {
     if [ ! -f "$PEER_CERT_FILE" ]; then
-        grab_peer_cert
+        grab_peer_cert || { echo "[discovery] cannot connect to peer (cert extraction failed)" >&2; exit 1; }
     elif [ -z "${PEER_HOST:-}" ]; then
         PEER_HOST=$(openssl x509 -in "$PEER_CERT_FILE" -noout -subject 2>/dev/null | \
             sed -n 's/.*CN\s*=\s*//p')
@@ -61,8 +61,8 @@ grab_peer_cert() {
     local tmp="$(mktemp)"
     local purgatory="${PEER_CERT_FILE%/*}/../purgatory"
     mkdir -p "$purgatory"
-    # Extract the peer's server certificate as described at wiki1.mikf.pl/openssl.html
-    openssl s_client -connect "${host}:${port}" -showcerts </dev/null 2>/dev/null | \
+    # Extract the peer's server certificate with a timeout.
+    timeout 10 openssl s_client -connect "${host}:${port}" -showcerts </dev/null 2>/dev/null | \
         sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > "$tmp"
     if [ -s "$tmp" ]; then
         local peer_host
@@ -75,6 +75,7 @@ grab_peer_cert() {
         PEER_HOST="$peer_host"
     else
         echo "[discovery] failed to extract peer certificate from ${host}:${port}" >&2
+        echo "[discovery] (peer may be unreachable or not running yet)" >&2
         return 1
     fi
     rm -f "$tmp"
