@@ -1,0 +1,16 @@
+{
+	"name": "mtls-hello",
+	"description": "Minimal mutual-TLS HTTP server: GET /:whatever returns $whatever as text/plain",
+	"version": "0.1.4",
+	"authors": [
+		"mika"
+	],
+	"license": "MIT",
+	"targetType": "executable",
+	"preBuildCommands": [
+		"bash scripts/version.sh"
+	],
+	"dependencies": {
+		"vibe-d:http": "~>0.10.0"
+	}
+}

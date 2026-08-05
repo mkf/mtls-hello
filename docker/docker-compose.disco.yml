@@ -1,0 +1,30 @@
+# Discovery test — two containers, host network (required for multicast
+# with rootless Docker which uses slirp4netns instead of a Linux bridge).
+services:
+  alpha:
+    image: mtls-hello-arch-installed
+    network_mode: host
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /tmp/certs
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+          -keyout /tmp/certs/server.key -out /tmp/certs/server.crt \
+          -subj /CN=alpha >/dev/null 2>&1
+        HOST_NAME=alpha /usr/bin/mtls-hello 18443 \
+          /tmp/certs/server.crt /tmp/certs/server.key
+
+  beta:
+    image: mtls-hello-arch-installed
+    network_mode: host
+    command:
+      - bash
+      - -c
+      - |
+        mkdir -p /tmp/certs
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+          -keyout /tmp/certs/server.key -out /tmp/certs/server.crt \
+          -subj /CN=beta >/dev/null 2>&1
+        HOST_NAME=beta /usr/bin/mtls-hello 18444 \
+          /tmp/certs/server.crt /tmp/certs/server.key

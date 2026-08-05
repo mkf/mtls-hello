@@ -1,0 +1,22 @@
+# Legacy generated TLS test PKI; no longer used. Kept ignored for safety.
+certs/
+
+# Self-extracting installers produced by `just self-extract`
+mtls-hello-installer-*.sh
+
+# Native package build output
+dist/
+
+# dub build artifacts
+.dub/
+*.o
+*.a
+mtls-hello
+
+# universal
+.DS_Store
+Thumbs.db
+*.log
+
+# guix cc shim created by justfile
+.guix-bin/

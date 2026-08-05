@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Clear any inherited library path. The script uses host utilities (sed, tar,
+# openssl, cp, mkdir) and must not link them against a foreign libc. The
+# installed binary gets its library path from the systemd unit or the operator.
+unset LD_LIBRARY_PATH
+
+usage() {
+    echo "Usage: $0 {install|install-service}"
+    echo "  install         Install the binary, libraries, handlers, and hook templates to ~/.local"
+    echo "  install-service Create the systemd user service unit"
+    exit "${1:-0}"
+}
+
+extract_payload() {
+    if [ -z "${_SE_PAYLOAD_DIR:-}" ]; then
+        _SE_PAYLOAD_DIR=$(mktemp -d)
+        # Remove payload dir on exit, unless we are in the middle of a failed
+        # command where the shell will already be exiting. The explicit trap
+        # avoids leaking the tar extraction directory in normal flows.
+        trap 'rm -rf "$_SE_PAYLOAD_DIR"' EXIT
+        sed '1,/^__PAYLOAD__$/d' "$0" | base64 -d | tar xz -C "$_SE_PAYLOAD_DIR"
+    fi
+}
+
+do_install() {
+    extract_payload
+
+    local dst_bin="$HOME/.local/bin"
+    local dst_lib="$HOME/.local/lib/mtls-hello"
+    local dst_share="$HOME/.local/share/mtls-hello"
+
+    mkdir -p "$dst_bin" "$dst_lib" "$dst_share/handlers" "$dst_share/scripts"
+
+    install -D -m 755 "$_SE_PAYLOAD_DIR/bin/mtls-hello" "$dst_bin/mtls-hello"
+
+    rm -rf "$dst_lib"/*
+    cp -P "$_SE_PAYLOAD_DIR/lib/mtls-hello/"* "$dst_lib/"
+
+    if [ -d "$dst_share/handlers" ]; then
+        rm -rf "$dst_share/handlers"
+    fi
+    cp -r "$_SE_PAYLOAD_DIR/share/mtls-hello/handlers" "$dst_share/"
+
+    if [ -d "$dst_share/scripts" ]; then
+        rm -rf "$dst_share/scripts"
+    fi
+    cp -r "$_SE_PAYLOAD_DIR/share/mtls-hello/scripts" "$dst_share/"
+
+    # Generate self-signed server certificate on first install if missing.
+    mkdir -p "$dst_share/certs/certs" "$dst_share/certs/private"
+    if [ ! -f "$dst_share/certs/certs/server.crt" ]; then
+        if ! openssl version >/dev/null 2>&1; then
+            echo "Warning: openssl not found; cannot generate self-signed server certificate." >&2
+            echo "Install openssl or provide certificates manually." >&2
+        else
+            openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+                -keyout "$dst_share/certs/private/server.key" \
+                -out "$dst_share/certs/certs/server.crt" \
+                -subj "/CN=$(hostname)" >/dev/null 2>&1
+            chmod 600 "$dst_share/certs/private/server.key"
+            echo "Generated self-signed server certificate for $(hostname)"
+        fi
+    fi
+
+    echo "Installed mtls-hello to $dst_bin/mtls-hello"
+    echo "Installed handlers to $dst_share/handlers/"
+    echo "Installed hook templates to $dst_share/scripts/"
+    echo "Installed certificates to $dst_share/certs/"
+    echo
+    echo "To activate a hook: cp <name>.new <name> && chmod +x <name>"
+    echo "Re-running install overwrites .new files but preserves your custom files."
+    echo
+    echo "If ~/.local/bin is not on your PATH, add:"
+    echo '  export PATH="$HOME/.local/bin:$PATH"'
+    echo
+    echo "To enable discovery-triggered sync, set:"
+    echo '  export CALLBACK_SCRIPT="$HOME/.local/share/mtls-hello/scripts/on-discover.sh"'
+    echo "(Required — the server has no default path for CALLBACK_SCRIPT.)"
+}
+
+do_install_service() {
+    local binary="$HOME/.local/bin/mtls-hello"
+    if [ ! -f "$binary" ]; then
+        echo "Error: $binary not found. Run '$0 install' first." >&2
+        exit 1
+    fi
+
+    local unit_dir="$HOME/.config/systemd/user"
+    mkdir -p "$unit_dir"
+
+    cat > "$unit_dir/mtls-hello.service" <<'EOF'
+[Unit]
+Description=mtls-hello mutual-TLS server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=%h/.local/lib/mtls-hello
+ExecStart=%h/.local/bin/mtls-hello \
+  0 \
+  %h/.local/share/mtls-hello/certs/certs/server.crt \
+  %h/.local/share/mtls-hello/certs/private/server.key \
+  --port=0 --port-file=%t/mtls-hello.port \
+  --data-dir=%h/.local/share/mtls-hello
+ExecStartPost=/bin/sh -c 'echo "mtls-hello listening on port $(cat %t/mtls-hello.port)"'
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+
+    echo "Service unit installed to $unit_dir/mtls-hello.service"
+    echo
+    echo "Next steps:"
+    echo "  systemctl --user daemon-reload"
+    echo "  systemctl --user enable --now mtls-hello"
+    echo
+    echo "To add certificates and trust paths, create a drop-in override:"
+    echo "  systemctl --user edit mtls-hello"
+}
+
+case "${1:-}" in
+    install) do_install; exit 0 ;;
+    install-service) do_install_service; exit 0 ;;
+    --help|-h) usage 0 ;;
+    "") usage 1 ;;
+    *) usage 1 ;;
+esac
+
+__PAYLOAD__

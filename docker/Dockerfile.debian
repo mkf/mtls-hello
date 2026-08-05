@@ -1,0 +1,23 @@
+# Debian build container for mtls-hello.
+# Installs its own toolchain from scratch — no Guix, no host compilers.
+# Source is mounted read-only at /src at run time; the package is written to /out.
+FROM debian:bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ldc \
+        dub \
+        libssl-dev \
+        pkg-config \
+        dpkg-dev \
+        gcc \
+        libc6-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/gcc /usr/local/bin/cc
+
+WORKDIR /src
+
+# The source is mounted read-only at /src. Copy it to a writable location
+# so version.sh can generate source/version_.d, then build from there.
+# The finished package is copied to /out (also mounted).
+CMD ["bash", "-c", "cp -a /src /build && cd /build && rm -rf .dub && PKG_OUTPUT_DIR=/out bash scripts/package-debian.sh"]

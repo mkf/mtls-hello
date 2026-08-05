@@ -1,0 +1,17 @@
+#!/bin/bash
+# Pre-push hook — runs before bundles are pushed to a discovered peer.
+# Copy this file to pre-push.sh to activate:
+#   cp pre-push.sh.new pre-push.sh && chmod +x pre-push.sh
+#
+# Environment variables available:
+#   HOST_NAME       Our hostname
+#   PEER_NETLOC     Peer's IP:port
+#   PEER_CERT_FILE  Path to peer's trusted certificate
+#   OUR_CERT        Our client certificate
+#   OUR_KEY         Our client key
+#   REPOS_ROOT      Directory containing bare git repos
+set -euo pipefail
+
+# Default: no-op — customize below.
+echo "[pre-push] HOST_NAME=${HOST_NAME:-?} PEER_NETLOC=${PEER_NETLOC:-?}" >&2
+exit 0
