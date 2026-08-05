@@ -1,6 +1,6 @@
 # Test image — extends the Debian build image with BATS, curl, git, and just.
 FROM mtls-hello-build-debian
-RUN apt-get update && apt-get install -y --no-install-recommends bats curl git \
+RUN apt-get update && apt-get install -y --no-install-recommends bats curl git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # Install just — single static binary
 RUN curl -sSL https://github.com/casey/just/releases/download/1.25.2/just-1.25.2-x86_64-unknown-linux-musl.tar.gz | \
