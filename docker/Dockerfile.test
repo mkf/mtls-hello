@@ -1,0 +1,5 @@
+# Test image — extends the Debian build image with BATS and test tools.
+# Uses the same base toolchain as Dockerfile.debian.
+FROM mtls-hello-build-debian
+RUN apt-get update && apt-get install -y --no-install-recommends bats curl git \
+    && rm -rf /var/lib/apt/lists/*

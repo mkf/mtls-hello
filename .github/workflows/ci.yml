@@ -12,23 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build test image (cached layers)
-        run: |
-          docker build -t mtls-hello-test -f - . <<'DOCKERFILE'
-          FROM debian:bookworm
-          RUN apt-get update && apt-get install -y --no-install-recommends \
-                  ldc dub libssl-dev pkg-config gcc libc6-dev zlib1g-dev \
-                  bats curl git openssl \
-              && rm -rf /var/lib/apt/lists/* \
-              && ln -sf /usr/bin/gcc /usr/local/bin/cc
-          COPY . /src
-          WORKDIR /src
-          RUN DC=ldc2 dub build --compiler=ldc2
-          DOCKERFILE
+      - name: Build Debian base image (shared with package jobs)
+        run: docker build -t mtls-hello-build-debian -f docker/Dockerfile.debian .
 
-      - name: Run BATS tests
+      - name: Build test image (+ bats, curl, git)
+        run: docker build -t mtls-hello-test -f docker/Dockerfile.test .
+
+      - name: Build binary and run tests
         run: |
-          docker run --rm mtls-hello-test bats tests/
+          docker run --rm mtls-hello-test bash -c '
+            cp -a /src /build && cd /build && rm -rf .dub
+            DC=ldc2 dub build --compiler=ldc2
+            bats tests/
+          '
 
   package-debian:
     needs: test
