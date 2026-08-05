@@ -126,7 +126,7 @@ for repo_dir in "$REPOS_ROOT"/*/; do
             if [ -n "$purg" ] && [ -n "$(ls -A "$purg" 2>/dev/null)" ]; then
                 echo "[$name] Found captured certs in $purg:"
                 ls "$purg"/*.crt 2>/dev/null | while read f; do
-                    local cn=$(openssl x509 -in "$f" -noout -subject 2>/dev/null | sed -n 's/.*CN\s*=\s*//p')
+                    cn=$(openssl x509 -in "$f" -noout -subject 2>/dev/null | sed -n 's/.*CN\s*=\s*//p')
                     echo "[$name]   bash ${PEER_CERT_FILE%/*}/scripts/trust-host.sh $cn $f"
                 done
             else
