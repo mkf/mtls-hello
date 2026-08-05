@@ -49,8 +49,8 @@ for repo_dir in "$REPOS_ROOT"/*/; do
     fi
 
     bundle="$(mktemp)"
-    echo "[$name] bundling all refs"
-    if ! git -C "$repo_dir" bundle create "$bundle" --all >/dev/null 2>&1; then
+    echo "[$name] bundling refs/heads + refs/tags"
+    if ! git -C "$repo_dir" bundle create "$bundle" --branches --tags >/dev/null 2>&1; then
         echo "[$name] bundle creation failed; skipping"
         skipped=$((skipped + 1))
         rm -f "$bundle"
