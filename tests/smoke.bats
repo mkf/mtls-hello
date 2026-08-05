@@ -910,7 +910,8 @@ mkfixture_bare_symlinked() {
   [ "$port" -ne 8443 ]
   grep -q ":$port" "$log"
 
-  run curl -sS --fail --max-time 5 \n    --cacert "$SERVER_CERT" \
+  run curl -sS --fail --max-time 5 \
+    --cacert "$SERVER_CERT" \
     --cert "$CLIENT_CERT" --key "$CLIENT_KEY" \
     "https://localhost:$port/hello"
   [ "$status" -eq 0 ]
