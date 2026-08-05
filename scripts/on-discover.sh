@@ -17,6 +17,11 @@ unset LD_LIBRARY_PATH
 
 : "${HOST_NAME:?}" "${PEER_NETLOC:?}" "${PEER_CERT_FILE:?}" "${OUR_CERT:?}" "${OUR_KEY:?}" "${REPOS_ROOT:?}"
 
+# FFDC (First Failure Data Capture): on first push failure for a given
+# repo+host pair, capture full details to a log file. Subsequent failures
+# just reference the existing log instead of spamming the journal.
+FFDC_DIR="$(dirname "$0")/../ffdc"
+
 # Source shared curl/cert functions.
 . "$(dirname "$0")/sync-common.sh"
 
@@ -62,9 +67,24 @@ for repo_dir in "$REPOS_ROOT"/*/; do
     if echo "$push_out" | grep -q "HTTP 200"; then
         synced=$((synced + 1))
         echo "[$name] pushed"
+        # Success clears any persisted FFDC log for this repo+host pair.
+        rm -f "$FFDC_DIR/${name}-${HOST_NAME}"
     else
-        echo "[$name] push failed. Server response:"
-        echo "$push_out" | sed 's/^/  /'
+        ffdc="$FFDC_DIR/${name}-${HOST_NAME}"
+        if [ -f "$ffdc" ]; then
+            echo "[$name] push to $HOST_NAME still failing — see $ffdc"
+        else
+            mkdir -p "$FFDC_DIR"
+            {
+                echo "timestamp: $(date -Iseconds)"
+                echo "peer: $PEER_NETLOC"
+                echo "host: $HOST_NAME"
+                echo "repo: $name"
+                echo "---server response---"
+                echo "$push_out"
+            } > "$ffdc"
+            echo "[$name] push failed [$HOST_NAME] — details captured to $ffdc"
+        fi
         if echo "$push_out" | grep -q "does not exist"; then
             echo "[$name] The peer's certificate is not trusted yet."
             purg="${PEER_CERT_FILE%/*}/../purgatory"
