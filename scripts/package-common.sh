@@ -94,6 +94,7 @@ stage_install_tree() {
     install -D -m 755 mtls-hello "$root/usr/bin/mtls-hello"
     cp -p handlers/bundle.post.sh "$root/var/lib/mtls-hello/handlers/"
     cp -p scripts/on-discover.sh "$root/var/lib/mtls-hello/scripts/"
+    cp -p scripts/sync-common.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/trust-host.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/pre-push.sh.new "$root/var/lib/mtls-hello/scripts/"
 

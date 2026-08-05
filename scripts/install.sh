@@ -19,6 +19,7 @@ fi
 
 cp -r handlers "$HOME/.local/share/mtls-hello/handlers"
 cp -p scripts/on-discover.sh "$HOME/.local/share/mtls-hello/scripts/on-discover.sh"
+cp -p scripts/sync-common.sh "$HOME/.local/share/mtls-hello/scripts/sync-common.sh"
 cp -p scripts/trust-host.sh "$HOME/.local/share/mtls-hello/scripts/trust-host.sh"
 # .new files are always overwritten with latest defaults.
 # User-created files (without .new) are never touched.
