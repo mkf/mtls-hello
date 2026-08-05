@@ -482,6 +482,15 @@ mkfixture_bare_symlinked() {
   # tag: local-tag-v1 pushed to peer gamma.
   git -C "$fixture/peer/gamma.git" show-ref --verify --quiet refs/tags/local-tag-v1
 
+  # Verify cloning from bare repos works — should see branches and recover content.
+  local clone
+  clone="$(mktemp -d)"
+  git clone "$fixture/local/alpha.git" "$clone/alpha" 2>/dev/null
+  [ -d "$clone/alpha" ]
+  [ "$(git -C "$clone/alpha" rev-parse HEAD)" = "$(git -C "$fixture/local/alpha.git" rev-parse refs/heads/main)" ]
+  grep -q "alpha-local" "$clone/alpha/alpha.txt" 2>/dev/null
+  rm -rf "$clone"
+
   rm -rf "$fixture"
 }
 

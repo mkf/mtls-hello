@@ -55,4 +55,11 @@ done < <(git -C "$repo_dir" for-each-ref --format='%(refname)' "${remote_ns}/")
 # 3. Fetch tags without force; skip conflicts silently.
 git -C "$repo_dir" fetch "$tmp" "refs/tags/*:refs/tags/*" || true
 
+# 4. If HEAD points to a nonexistent ref (bare repo just created), set it
+# to the first local branch so `git clone` works.
+first_branch=$(git -C "$repo_dir" for-each-ref --format='%(refname)' refs/heads | head -1)
+if [ -n "$first_branch" ] && ! git -C "$repo_dir" rev-parse --verify HEAD >/dev/null 2>&1; then
+    git -C "$repo_dir" symbolic-ref HEAD "$first_branch"
+fi
+
 echo "ok"
