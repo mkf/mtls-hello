@@ -103,6 +103,14 @@ for repo_dir in "$REPOS_ROOT"/*/; do
         continue
     fi
 
+    # Check if peer already has our HEAD to avoid unnecessary bundling.
+    our_head=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo "")
+    peer_refs=$(mtls_curl "/head?repo=${name}" 2>/dev/null || true)
+    if [ -n "$our_head" ] && echo "$peer_refs" | grep -q "HEAD $our_head"; then
+        echo "[$name] peer HEAD matches; skipping"
+        continue
+    fi
+
     bundle="$(mktemp)"
     echo "[$name] bundling all refs"
     if ! git -C "$repo_dir" bundle create "$bundle" --all >/dev/null 2>&1; then
