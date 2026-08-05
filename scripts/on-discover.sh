@@ -135,14 +135,14 @@ for repo_dir in "$REPOS_ROOT"/*/; do
                 echo "[$name] Found captured certs in $purg:"
                 ls "$purg"/*.crt 2>/dev/null | while read f; do
                     cn=$(openssl x509 -in "$f" -noout -subject 2>/dev/null | sed -n 's/.*CN\s*=\s*//p')
-                    echo "[$name]   bash ${PEER_CERT_FILE%/*}/scripts/trust-host.sh $cn $f"
+                    printf '[%s]   bash %s/scripts/trust-host.sh %s %s\n' "$name" "${PEER_CERT_FILE%/*}" "$cn" "$f"
                 done
             else
-                echo "[$name] Warning: no captured certs in $purg"
-                echo "[$name] The peer has not connected yet, or purgatory is empty."
+                printf '[%s] Warning: no captured certs in %s\n' "$name" "$purg"
+                printf '[%s] The peer has not connected yet, or purgatory is empty.\n' "$name"
             fi
-            echo "[$name] Trust the peer with:"
-            echo "[$name]   bash ${PEER_CERT_FILE%/*}/scripts/trust-host.sh $HOST_NAME <cert-file>"
+            printf '[%s] Trust the peer with:\n' "$name"
+            printf '[%s]   bash %s/scripts/trust-host.sh %s <cert-file>\n' "$name" "${PEER_CERT_FILE%/*}" "$HOST_NAME"
         fi
         skipped=$((skipped + 1))
     fi
