@@ -21,11 +21,13 @@ mtls_curl() {
     local path="$1"
     ensure_peer_host
     local peer_ip="${PEER_NETLOC%%:*}" peer_port="${PEER_NETLOC##*:}"
-    curl -sS --fail --max-time 5 \
+    # Capture response body even on HTTP errors (removed --fail).
+    curl -sS --max-time 5 \
         --cacert "$PEER_CERT_FILE" \
         --cert "$OUR_CERT" --key "$OUR_KEY" \
         --resolve "${PEER_HOST}:${peer_port}:${peer_ip}" \
-        "https://${PEER_HOST}:${peer_port}${path}"
+        -w '\nHTTP %{http_code}' \
+        "https://${PEER_HOST}:${peer_port}${path}" 2>&1
 }
 
 mtls_curl_post() {
@@ -33,12 +35,13 @@ mtls_curl_post() {
     local file="$2"
     ensure_peer_host
     local peer_ip="${PEER_NETLOC%%:*}" peer_port="${PEER_NETLOC##*:}"
-    curl -sS --fail --max-time 30 \
+    curl -sS --max-time 30 \
         --cacert "$PEER_CERT_FILE" \
         --cert "$OUR_CERT" --key "$OUR_KEY" \
         --data-binary "@$file" \
         --resolve "${PEER_HOST}:${peer_port}:${peer_ip}" \
-        "https://${PEER_HOST}:${peer_port}${path}"
+        -w '\nHTTP %{http_code}' \
+        "https://${PEER_HOST}:${peer_port}${path}" 2>&1
 }
 
 # Ensure PEER_HOST is set. Grab the cert (which sets it) if missing,
@@ -110,13 +113,13 @@ for repo_dir in "$REPOS_ROOT"/*/; do
     fi
 
     echo "[$name] pushing bundle to $PEER_NETLOC"
-    push_err=$(mtls_curl_post "/bundle?repo=${name}&host=${HOST_NAME}" "$bundle" 2>&1) && push_ok=0 || push_ok=$?
-    if [ "$push_ok" -eq 0 ]; then
+    push_out=$(mtls_curl_post "/bundle?repo=${name}&host=${HOST_NAME}" "$bundle" 2>&1)
+    if echo "$push_out" | grep -q "HTTP 200"; then
         synced=$((synced + 1))
         echo "[$name] pushed"
     else
-        echo "[$name] push failed: $push_err"
-        if echo "$push_err" | grep -q "does not exist"; then
+        echo "[$name] push failed: $(echo "$push_out" | tail -1)"
+        if echo "$push_out" | grep -q "does not exist"; then
             echo "[$name] The peer's certificate is not trusted yet."
             purg="${PEER_CERT_FILE%/*}/../purgatory"
             purg="$(cd "$purg" 2>/dev/null && pwd)" || purg=""
