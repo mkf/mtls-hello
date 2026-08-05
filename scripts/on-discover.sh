@@ -63,7 +63,8 @@ for repo_dir in "$REPOS_ROOT"/*/; do
         synced=$((synced + 1))
         echo "[$name] pushed"
     else
-        echo "[$name] push failed: $(echo "$push_out" | tail -1)"
+        echo "[$name] push failed. Server response:"
+        echo "$push_out" | sed 's/^/  /'
         if echo "$push_out" | grep -q "does not exist"; then
             echo "[$name] The peer's certificate is not trusted yet."
             purg="${PEER_CERT_FILE%/*}/../purgatory"
