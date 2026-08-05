@@ -315,6 +315,7 @@ private HTTPServerSettings buildServerSettings(ushort port, OpenSSLContext tls)
 	settings.port = port;
 	settings.bindAddresses = ["::"];
 	settings.tlsContext = tls;
+	settings.maxRequestSize = 100_000_000; // 100MB for git bundles
 	return settings;
 }
 
