@@ -73,6 +73,15 @@ start_server() {
   bin_dir="${bin_dir:-.}"
   bin_name="$(dub describe --data=target-name 2>/dev/null | tail -1)"
   bin_name="${bin_name:-mtls-hello}"
+  # Fallback: look for the binary in the current directory.
+  local binary="$bin_dir/$bin_name"
+  if [ ! -x "$binary" ]; then
+    binary="$(pwd)/mtls-hello"
+  fi
+  if [ ! -x "$binary" ]; then
+    echo "Error: cannot find mtls-hello binary (tried $bin_dir/$bin_name and ./mtls-hello)" >&2
+    return 1
+  fi
 
   # Ensure the test trust dirs are available (e.g., after an explicit teardown).
   if [[ -z "$TRUST_DIR" ]]; then
@@ -80,20 +89,28 @@ start_server() {
   fi
 
   SERVER_PID=""
-  "$bin_dir/$bin_name" "$port" \
+  "$binary" "$port" \
     "$SERVER_CERT" "$SERVER_KEY" \
     --trust-dir "$TRUST_DIR" \
     --purgatory-dir "$PURGATORY_DIR" \
     $args >/tmp/mtls-server-$$.log 2>&1 &
   SERVER_PID=$!
 
-  # Wait until the port accepts TCP connections. Use fd 5 to avoid
-  # colliding with BATS' internal use of fd 3.
+  # Wait until the port accepts TCP connections.
   local _i
   for _i in $(seq 1 100); do
+    # Try bash /dev/tcp first; fall back to nc.
     if (exec 5<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
       exec 5>&- 5<&- 2>/dev/null || true
       return 0
+    fi
+    if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$port" 2>/dev/null; then
+      return 0
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "server died (pid $SERVER_PID) before accepting connections" >&2
+      cat /tmp/mtls-server-$$.log >&2 || true
+      return 1
     fi
     sleep 0.1
   done
