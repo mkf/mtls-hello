@@ -38,7 +38,11 @@ test *args:
 # run the Robot Framework end-to-end tests (new, will replace BATS over time)
 # filter: just robot -- -i smoke
 robot *args:
-    nix-shell --run 'robot -d robot-output robot/mtls_hello.robot {{args}}'
+    nix-shell --run 'robot -d robot-output robot/ {{args}}'
+
+# run only the drop-box Robot tests (feature 023)
+robot-dropbox *args:
+    nix-shell --run 'robot -d robot-output robot/dropbox.robot {{args}}'
 
 # run tests in Docker (matches CI environment, no Nix needed)
 # filter: just test-docker --filter "bare-repo sync"

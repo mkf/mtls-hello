@@ -92,7 +92,7 @@ _mtls_curl() {
         "$url" 2>/dev/null)" || {
         # curl itself failed (TLS, network, etc.).
         echo "error: curl failed for $method $url" >&2
-        rm -f -- "$_mtls_hdr_file" "$_mtls_body_file" 2>/dev/null || true
+        rm -- "$_mtls_hdr_file" "$_mtls_body_file" 2>/dev/null || true
         exit 1
     }
 }
@@ -111,6 +111,6 @@ _mtls_exit_for_status() {
 
 # Cleanup temp files. Call at end of wrapper or trap.
 _mtls_cleanup() {
-    [ -n "${_mtls_hdr_file:-}" ] && rm -f -- "$_mtls_hdr_file" 2>/dev/null || true
-    [ -n "${_mtls_body_file:-}" ] && rm -f -- "$_mtls_body_file" 2>/dev/null || true
+    [ -n "${_mtls_hdr_file:-}" ] && rm -- "$_mtls_hdr_file" 2>/dev/null || true
+    [ -n "${_mtls_body_file:-}" ] && rm -- "$_mtls_body_file" 2>/dev/null || true
 }

@@ -157,7 +157,8 @@ class MtlsLibrary:
         hosts_dir = self._data_dir / "hosts"
         purgatory_dir = self._data_dir / "purgatory"
         repos_dir = self._data_dir / "repos"
-        for d in (handlers_dir, scripts_dir, hosts_dir, purgatory_dir, repos_dir):
+        drop_dir = self._data_dir / "drop"
+        for d in (handlers_dir, scripts_dir, hosts_dir, purgatory_dir, repos_dir, drop_dir):
             d.mkdir(parents=True)
 
         for src in (self._project_root / "handlers").glob("*.sh"):
@@ -303,7 +304,8 @@ class MtlsLibrary:
         # Known directories, bottom-up.
         known_dirs = [
             "apache/mime", "apache", "handlers", "scripts", "hosts",
-            "purgatory", "repos", "identity", "certs/certs", "certs/private",
+            "purgatory", "repos", "identity", "drop",
+            "certs/certs", "certs/private",
             "certs",
         ]
         for rel in sorted(known_dirs, key=lambda r: -r.count("/")):
@@ -412,3 +414,221 @@ class MtlsLibrary:
             self._data_dir / "hosts" / "evil.crt",
         )
         (self._data_dir / "hosts" / "test-client.crt").unlink(missing_ok=True)
+
+    # ==================================================================
+    # Drop-box keywords (feature 023)
+    # ==================================================================
+
+    def generate_alternate_identities(self, identities):
+        """Generate one or more alternate self-signed identities.
+        Each item is (name, cn)."""
+        for name, cn in identities:
+            cmd = [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-days", "1",
+                "-keyout", str(self._cert_dir / f"{name}.key"),
+                "-out", str(self._cert_dir / f"{name}.crt"),
+                "-subj", f"/CN={cn}",
+            ]
+            result = self._run(cmd)
+            if result.returncode != 0:
+                raise AssertionError(f"openssl failed for {name}: {result.stderr}")
+
+    def trust_identity(self, name):
+        """Copy <name>.crt into <data-dir>/hosts/<cn>.crt."""
+        cert_file = self._cert_dir / f"{name}.crt"
+        result = self._run(
+            ["openssl", "x509", "-in", str(cert_file), "-noout",
+             "-subject", "-nameopt", "RFC2253"]
+        )
+        cn = ""
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("subject="):
+                rest = line[len("subject="):]
+                for tag in ("CN = ", "CN=", "CN="):
+                    pos = rest.find(tag)
+                    if pos != -1:
+                        cn = rest[pos + len(tag):]
+                        for sep in (",",):
+                            ci = cn.find(sep)
+                            if ci != -1:
+                                cn = cn[:ci]
+                        cn = cn.strip()
+                        break
+                break
+        if not cn:
+            raise AssertionError(f"could not extract CN from {cert_file}")
+        shutil.copy(cert_file, self._data_dir / "hosts" / f"{cn}.crt")
+
+    def trust_two_identities(self):
+        """Generate alice + bob and trust both."""
+        self.generate_alternate_identities(
+            [("alice", "alice.test"), ("bob", "bob.test")]
+        )
+        self.trust_identity("alice")
+        self.trust_identity("bob")
+
+    def cert_for(self, name):
+        return str(self._cert_dir / f"{name}.crt")
+
+    def key_for(self, name):
+        return str(self._cert_dir / f"{name}.key")
+
+    def _curl_full(self, path, *, method="GET", cert=None, body_file=None,
+                   extra_headers=None, timeout=10):
+        """Make a curl request; return (status, headers_dict, body_bytes)."""
+        import tempfile as _t
+        hf, hp = _t.mkstemp(prefix="mtlsh-h-", dir=self._cert_dir)
+        os.close(hf)
+        bf, bp = _t.mkstemp(prefix="mtlsh-b-", dir=self._cert_dir)
+        os.close(bf)
+        cmd = ["curl", "-sS", "--max-time", str(timeout),
+               "--cacert", str(self._cert_dir / "server.crt"),
+               "-X", method, "-D", hp, "-o", bp, "-w", "%{http_code}"]
+        if cert:
+            cmd.extend(["--cert", cert[0], "--key", cert[1]])
+        if body_file:
+            cmd.extend(["--data-binary", f"@{body_file}"])
+        if extra_headers:
+            for k, v in extra_headers.items():
+                cmd.extend(["--header", f"{k}: {v}"])
+        cmd.append(f"https://localhost:{self._port}{path}")
+        result = self._run(cmd, timeout=timeout + 2)
+        try:
+            status = int(result.stdout.strip() or -1)
+        except ValueError:
+            status = -1
+        headers = {}
+        try:
+            with open(hp, "r", errors="replace") as f:
+                for line in f:
+                    if ":" not in line or line.startswith("HTTP/"):
+                        continue
+                    k, _, v = line.partition(":")
+                    k = k.strip().lower()
+                    v = v.strip().rstrip("\r")
+                    headers[k] = v
+        except OSError:
+            pass
+        finally:
+            try: os.unlink(hp)
+            except OSError: pass
+        body = b""
+        try:
+            with open(bp, "rb") as f:
+                body = f.read()
+        except OSError:
+            pass
+        finally:
+            try: os.unlink(bp)
+            except OSError: pass
+        return status, headers, body
+
+    def mtls_drop(self, remote, source_file, identity="client"):
+        """PUT a file to /drop/<cn>/<remote>."""
+        c = self._identity_cert(identity)
+        path = f"/drop/{self._identity_cn(identity)}/{remote.lstrip('/')}"
+        s, h, b = self._curl_full(path, method="PUT", cert=c, body_file=source_file)
+        return s
+
+    def mtls_drop_body(self, remote, body_bytes, identity="client"):
+        """PUT raw bytes to /drop/<cn>/<remote>."""
+        import tempfile as _t
+        f, p = _t.mkstemp(prefix="mtlsh-put-", dir=self._cert_dir)
+        os.write(f, body_bytes)
+        os.close(f)
+        try:
+            return self.mtls_drop(remote, p, identity)
+        finally:
+            try: os.unlink(p)
+            except OSError: pass
+
+    def mtls_get_drop(self, remote, identity="client", headers=None):
+        """GET /drop/<cn>/<remote>; return (status, body_bytes)."""
+        c = self._identity_cert(identity)
+        path = f"/drop/{self._identity_cn(identity)}/{remote.lstrip('/')}"
+        return self._curl_full(path, method="GET", cert=c, extra_headers=headers)
+
+    def mtls_get_drop_status(self, remote, identity="client"):
+        return self.mtls_get_drop(remote, identity)[0]
+
+    def mtls_head_drop(self, remote, identity="client"):
+        c = self._identity_cert(identity)
+        path = f"/drop/{self._identity_cn(identity)}/{remote.lstrip('/')}"
+        return self._curl_full(path, method="HEAD", cert=c)
+
+    def mtls_delete_drop(self, remote, identity="client", headers=None):
+        c = self._identity_cert(identity)
+        path = f"/drop/{self._identity_cn(identity)}/{remote.lstrip('/')}"
+        return self._curl_full(path, method="DELETE", cert=c, extra_headers=headers)[0]
+
+    def mtls_mkcol_drop(self, remote, identity="client"):
+        c = self._identity_cert(identity)
+        path = f"/drop/{self._identity_cn(identity)}/{remote.lstrip('/')}"
+        return self._curl_full(path, method="MKCOL", cert=c)[0]
+
+    def mtls_copy_drop(self, src, dest, identity="client", overwrite=False):
+        c = self._identity_cert(identity)
+        cn = self._identity_cn(identity)
+        path = f"/drop/{cn}/{src.lstrip('/')}"
+        hdrs = {"Destination": f"/drop/{cn}/{dest.lstrip('/')}"}
+        if overwrite:
+            hdrs["Overwrite"] = "T"
+        return self._curl_full(path, method="COPY", cert=c, extra_headers=hdrs)[0]
+
+    def mtls_move_drop(self, src, dest, identity="client", overwrite=False):
+        c = self._identity_cert(identity)
+        cn = self._identity_cn(identity)
+        path = f"/drop/{cn}/{src.lstrip('/')}"
+        hdrs = {"Destination": f"/drop/{cn}/{dest.lstrip('/')}"}
+        if overwrite:
+            hdrs["Overwrite"] = "T"
+        return self._curl_full(path, method="MOVE", cert=c, extra_headers=hdrs)[0]
+
+    def mtls_propfind_drop(self, remote="", depth=0, identity="client"):
+        c = self._identity_cert(identity)
+        cn = self._identity_cn(identity)
+        path = f"/drop/{cn}/{remote.lstrip('/')}"
+        return self._curl_full(path, method="PROPFIND", cert=c,
+                               extra_headers={"Depth": str(depth)})
+
+    def _identity_cert(self, name):
+        """Return (cert_path, key_path) for a named identity."""
+        if name == "client":
+            return (self.client_cert(), self.client_key())
+        elif name == "evil":
+            return (self.evil_cert(), self.evil_key())
+        return (self.cert_for(name), self.key_for(name))
+
+    def _identity_cn(self, name):
+        """Return the CN for a named identity."""
+        if name == "client":
+            return "test-client"
+        elif name == "evil":
+            return "evil"
+        # Extract CN from the cert.
+        result = self._run([
+            "openssl", "x509", "-in", self.cert_for(name), "-noout",
+            "-subject", "-nameopt", "RFC2253"
+        ])
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("subject="):
+                for tag in ("CN = ", "CN=", "CN="):
+                    pos = line.find(tag)
+                    if pos != -1:
+                        cn = line[pos + len(tag):]
+                        for sep in (",",):
+                            ci = cn.find(sep)
+                            if ci != -1:
+                                cn = cn[:ci]
+                        return cn.strip()
+        return name
+
+    def mtls_get_drop_cross_host(self, url_cn, remote, identity="alice"):
+        """GET /drop/<url_cn>/<remote> using identity's cert.
+        Used to test cross-host 403 rejection."""
+        c = self._identity_cert(identity)
+        path = f"/drop/{url_cn}/{remote.lstrip('/')}"
+        return self._curl_full(path, method="GET", cert=c)

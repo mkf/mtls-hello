@@ -24,11 +24,16 @@ cleanup_pkgroot() {
     remove_file_safe "$root"/usr/lib/systemd/user/mtls-hello.service
     remove_file_safe "$root"/var/lib/mtls-hello/handlers/*
     remove_file_safe "$root"/var/lib/mtls-hello/scripts/*
+    remove_file_safe "$root"/var/lib/mtls-hello/cli/*
+    remove_file_safe "$root"/var/lib/mtls-hello/drop/*
+    remove_file_safe "$root"/var/lib/mtls-hello/identity/*
     # Per-distro metadata created by package-debian.sh / package-arch.sh.
     remove_file_safe "$root"/DEBIAN/control "$root"/DEBIAN/postinst
     remove_file_safe "$root"/.PKGINFO "$root"/.INSTALL
     local d
-    for d in "$root"/DEBIAN "$root"/var/lib/mtls-hello/handlers "$root"/var/lib/mtls-hello/scripts \
+    for d in "$root"/DEBIAN "$root"/var/lib/mtls-hello/cli "$root"/var/lib/mtls-hello/drop \
+             "$root"/var/lib/mtls-hello/identity \
+             "$root"/var/lib/mtls-hello/handlers "$root"/var/lib/mtls-hello/scripts \
              "$root"/var/lib/mtls-hello "$root"/usr/lib/systemd/user "$root"/usr/lib/systemd \
              "$root"/usr/lib "$root"/usr/bin "$root"/usr "$root"/var/lib "$root"/var; do
         [ -d "$d" ] || continue
@@ -115,15 +120,26 @@ stage_install_tree() {
     mkdir -p "$root/usr/bin" \
              "$root/var/lib/mtls-hello/handlers" \
              "$root/var/lib/mtls-hello/scripts" \
+             "$root/var/lib/mtls-hello/cli" \
+             "$root/var/lib/mtls-hello/drop" \
              "$root/usr/lib/systemd/user"
 
     install -D -m 755 mtls-hello "$root/usr/bin/mtls-hello"
     cp -p handlers/bundle.post.sh "$root/var/lib/mtls-hello/handlers/"
+    # Feature 023: per-host drop-box trust-gate reverse-proxy handler.
+    cp -p handlers/drop-proxy.sh "$root/var/lib/mtls-hello/handlers/"
+    # Feature 023: drop/ subdir is the mod_dav DocumentRoot.
+    mkdir -p "$root/var/lib/mtls-hello/drop"
     cp -p scripts/on-discover.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/sync-common.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/trust-host.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/merge-spool.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/pre-push.sh.new "$root/var/lib/mtls-hello/scripts/"
+    # Feature 023: client wrappers under cli/.
+    cp -p cli/_common-cname.sh "$root/var/lib/mtls-hello/cli/"
+    for w in cli/mtls-*.sh; do
+        cp -p "$w" "$root/var/lib/mtls-hello/cli/"
+    done
 
     # Cert-generation helper called by the systemd unit's ExecStartPre.
     # Generates a self-signed identity cert at ~/.local/share/mtls-hello/identity/ if missing.

@@ -154,7 +154,34 @@ chmod +x ~/.local/share/mtls-hello/scripts/pre-push.sh
 
 Your activated hooks are **never overwritten** by `just install`. Re-running install only updates the `.new` templates.
 
-### 7. Environment Variables
+### 7. Per-Host Drop-Box
+
+A per-host file drop-box at `/drop/<hostname>/<rest>` served by Apache `mod_dav` on a loopback VirtualHost, fronted by an mTLS CGI proxy that enforces:
+
+- **401 Unauthorized** if the client cert is not in the trust store.
+- **403 Forbidden** if the URL prefix (`<hostname>`) does not match the verified client cert CN.
+
+Each trusted host sees only its own `drop/<cn>/` directory. The `mod_dav` backend handles PUT/GET/HEAD/DELETE/MKCOL/COPY/MOVE/PROPFIND/OPTIONS natively — no custom bash handlers.
+
+Client wrappers (`cli/mtls-*.sh`) derive the hostname prefix from the cert CN automatically:
+
+```bash
+# Drop a file
+cli/mtls-drop.sh --cert alice.crt --key alice.key --cacert peer.crt \
+    --server https://peer:8443 --source notes.txt
+
+# Fetch it back
+cli/mtls-fetch.sh --cert alice.crt --key alice.key --cacert peer.crt \
+    --server https://peer:8443 --name notes.txt --out notes.txt
+
+# List your box
+cli/mtls-ls.sh --cert alice.crt --key alice.key --cacert peer.crt \
+    --server https://peer:8443
+```
+
+See `specs/023-per-host-dropbox/contracts/client-cli.md` for the full wrapper contract.
+
+### 8. Environment Variables
 
 | Variable | Purpose | Default |
 |---|---|---|

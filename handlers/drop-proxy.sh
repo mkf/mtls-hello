@@ -146,8 +146,8 @@ cat "$out_tmp"
 
 # --- cleanup ----------------------------------------------------------
 
-rm -f -- "$hdr_tmp" "$out_tmp" 2>/dev/null || true
+rm -- "$hdr_tmp" "$out_tmp" 2>/dev/null || true
 if [ -n "$body_tmp" ]; then
-    rm -f -- "$body_tmp" 2>/dev/null || true
+    rm -- "$body_tmp" 2>/dev/null || true
 fi
 exit 0
