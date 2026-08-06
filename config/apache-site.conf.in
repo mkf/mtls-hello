@@ -25,6 +25,7 @@
     SetEnv MTLS_SCRIPT_TIMEOUT {{SCRIPT_TIMEOUT}}
     SetEnv MTLS_REPOS_ROOT {{DATA_DIR}}/repos
     SetEnv MTLS_DAV_PORT {{DAV_PORT}}
+    SetEnv MTLS_NNCP_DIR   {{NNCP_DIR}}
 
     <Directory "{{HANDLERS_DIR}}">
         Options +ExecCGI
@@ -43,6 +44,12 @@
     # handler that validates trust + CN-vs-URL-prefix, then forwards to
     # the loopback mod_dav VH. Must appear BEFORE the catch-all ScriptAlias.
     ScriptAlias /drop/ {{HANDLERS_DIR}}/drop-proxy.sh/
+
+    # Per-host NNCP receive: POST /nncp/receive/ writes a NNCP-format
+    # outer packet into <nncp_dir>/queues/<self-id>/inbound/ and hands
+    # off to nncp-toss, which honours full-subscriber / relay-only /
+    # unconfigured roles natively (/tmp/nncp-8.13.0/src/toss.go:802-973).
+    ScriptAlias /nncp/receive/ {{HANDLERS_DIR}}/nncp-receive.post.sh/
 
     ScriptAlias / {{HANDLERS_DIR}}/
 </VirtualHost>

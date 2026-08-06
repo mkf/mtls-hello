@@ -87,6 +87,7 @@ sed \
     -e "s|{{HOST_NAME}}|$HOST_NAME|g" \
     -e "s|{{SCRIPT_TIMEOUT}}|$SCRIPT_TIMEOUT|g" \
     -e "s|{{DAV_PORT}}|$DAV_PORT|g" \
+    -e "s|{{NNCP_DIR}}|$DATA_DIR/nncp|g" \
     "$SITE_TEMPLATE" > "$SITE_CONF"
 
 MPM_MODULE=""

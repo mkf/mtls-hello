@@ -34,7 +34,19 @@ cp -p handlers/hello.get.sh handlers/head.get.sh handlers/spool.get.sh \
 for w in cli/_common-cname.sh cli/mtls-*.sh; do
     cp -p "$w" "$HOME/.local/share/mtls-hello/cli/"
 done
-cp -p scripts/on-discover.sh "$HOME/.local/share/mtls-hello/scripts/on-discover.sh"
+# Remove the legacy single-callback script if present (anchored filename,
+# `rm --`, never `rm -f` / `rm -rf`, per project's safety rule G1).
+[ -e "$HOME/.local/share/mtls-hello/scripts/on-discover.sh" ] && \
+    rm -- "$HOME/.local/share/mtls-hello/scripts/on-discover.sh"
+
+# Drop the new feature-025 directory tree wholesale. Each numbered script
+# inside is sourced/re-sourced from $_run-parts.sh at discovery time.
+install -d -m 0755 "$HOME/.local/share/mtls-hello/scripts/on-discovery.d"
+for f in scripts/on-discovery.d/*.sh; do
+    [ -e "$f" ] || continue
+    cp -p "$f" "$HOME/.local/share/mtls-hello/scripts/on-discovery.d/"
+    chmod 0755 "$HOME/.local/share/mtls-hello/scripts/on-discovery.d/$(basename -- "$f")" || true
+done
 cp -p scripts/sync-common.sh "$HOME/.local/share/mtls-hello/scripts/sync-common.sh"
 cp -p scripts/trust-host.sh "$HOME/.local/share/mtls-hello/scripts/trust-host.sh"
 cp -p scripts/merge-spool.sh "$HOME/.local/share/mtls-hello/scripts/merge-spool.sh"
@@ -46,23 +58,42 @@ cp -p scripts/migrate-layout.sh "$HOME/.local/share/mtls-hello/scripts/migrate-l
 # .new files are always overwritten with latest defaults.
 # User-created files (without .new) are never touched.
 cp -p scripts/pre-push.sh.new "$HOME/.local/share/mtls-hello/scripts/pre-push.sh.new"
-# Generate a self-signed identity certificate on first install if missing.
+# Generate identity material on first install if missing. We use
+# scripts/gen-certs.sh which is feature-025-aware: writes Ed25519+X25519 keys
+# directly into BOTH the mTLS cert at identity/<cn>.{crt,key} AND the NNCP-format
+# <data-dir>/nncp.hjson self: block. Idempotent.
 HOST="$(hostname)"
 # Sanitize the hostname for the filename (keep [A-Za-z0-9._-], else '_').
 HOST_FN="$(printf '%s' "$HOST" | tr -c 'A-Za-z0-9._-' '_')"
 mkdir -p "$HOME/.local/share/mtls-hello/identity"
 if [ ! -f "$HOME/.local/share/mtls-hello/identity/$HOST_FN.crt" ]; then
-    if ! openssl version >/dev/null 2>&1; then
+    if ! command -v openssl >/dev/null 2>&1; then
         echo "Warning: openssl not found; cannot generate self-signed identity certificate." >&2
         echo "Install openssl or provide certificates manually." >&2
     else
-        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-            -keyout "$HOME/.local/share/mtls-hello/identity/$HOST_FN.key" \
-            -out "$HOME/.local/share/mtls-hello/identity/$HOST_FN.crt" \
-            -subj "/CN=$HOST" >/dev/null 2>&1
-        chmod 600 "$HOME/.local/share/mtls-hello/identity/$HOST_FN.key"
-        echo "Generated self-signed identity certificate for $HOST"
+        if bash "$(dirname "$0")/gen-certs.sh" --cn "$HOST" -d "$HOME/.local/share/mtls-hello" \
+            >"$HOME/.local/share/mtls-hello/install-gencerts.log" 2>&1; then
+            echo "Generated Ed25519+X25519 identity for $HOST"
+        else
+            echo "gen-certs.sh failed; check $HOME/.local/share/mtls-hello/install-gencerts.log" >&2
+        fi
     fi
+fi
+
+# Build the NNCP single binary from /tmp/nncp-8.13.0 source and symlink the
+# subcommand names the project actually uses (nncp-toss, nncp-call, nncp-stat,
+# nncp-cfgnew, ...) into <data-dir>/bin/. Idempotent: re-running only refreshes
+# the symlinks if the binary is already present.
+if [ -d /tmp/nncp-8.13.0 ] && [ -f /tmp/nncp-8.13.0/src/cmd/nncp/main.go ]; then
+    if bash "$(dirname "$0")/build-nncp.sh" --src /tmp/nncp-8.13.0 --dir "$HOME/.local/share/mtls-hello/bin" \
+        >"$HOME/.local/share/mtls-hello/install-buildnncp.log" 2>&1; then
+        echo "Built NNCP binary at $HOME/.local/share/mtls-hello/bin/nncp"
+    else
+        echo "build-nncp.sh failed; check $HOME/.local/share/mtls-hello/install-buildnncp.log" >&2
+    fi
+else
+    echo "Note: /tmp/nncp-8.13.0 not present; skipping NNCP build." >&2
+    echo "      /nncp/receive/ will return 501 until the binary is installed." >&2
 fi
 
 # Migrate a legacy nested certs/ layout to the flat layout (no-op on fresh installs).
@@ -82,7 +113,7 @@ done
 
 echo "Installed mtls-hello to $HOME/.local/bin/mtls-hello"
 echo "Installed handlers to $HOME/.local/share/mtls-hello/handlers/"
-echo "Installed discovery callback to $HOME/.local/share/mtls-hello/scripts/on-discover.sh"
+echo "Installed discovery callback to $HOME/.local/share/mtls-hello/scripts/on-discovery.d/ (numbered scripts, lex run by _run-parts.sh)"
 echo "Installed hook templates (*.new) to $HOME/.local/share/mtls-hello/scripts/"
 echo "Installed certificates to $HOME/.local/share/mtls-hello/identity/"
 echo "Vendored runtime libs to $HOME/.local/lib/mtls-hello/"
@@ -106,5 +137,5 @@ echo
 echo "To enable discovery-triggered sync, set:"
 # shellcheck disable=SC2016
 # The advice is meant to be copied literally; $HOME should not expand here.
-echo '  export CALLBACK_SCRIPT="$HOME/.local/share/mtls-hello/scripts/on-discover.sh"'
+echo '  export CALLBACK_SCRIPT="$HOME/.local/share/mtls-hello/scripts/on-discovery.d/_run-parts.sh"'
 echo "(Required — the server has no default path for CALLBACK_SCRIPT.)"

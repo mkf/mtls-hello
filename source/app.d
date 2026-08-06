@@ -75,7 +75,7 @@ void main(string[] args)
 	if (cfg.dataDir.length > 0)
 	{
 		if (cfg.multicast.callbackScript.length == 0)
-			cfg.multicast.callbackScript = cfg.dataDir ~ "/scripts/on-discover.sh";
+			cfg.multicast.callbackScript = cfg.dataDir ~ "/scripts/on-discovery.d/_run-parts.sh";
 		if (!cfg.trust.trustDirExplicit)
 			cfg.trust.trustDir = cfg.dataDir ~ "/hosts";
 		if (!cfg.trust.purgatoryDirExplicit)
