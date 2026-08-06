@@ -24,6 +24,7 @@
     SetEnv MTLS_HOST_NAME {{HOST_NAME}}
     SetEnv MTLS_SCRIPT_TIMEOUT {{SCRIPT_TIMEOUT}}
     SetEnv MTLS_REPOS_ROOT {{DATA_DIR}}/repos
+    SetEnv MTLS_DAV_PORT {{DAV_PORT}}
 
     <Directory "{{HANDLERS_DIR}}">
         Options +ExecCGI
@@ -38,5 +39,32 @@
     RewriteRule ^/cert-echo$ /cert-echo.get.sh [PT]
     RewriteRule ^/([^/.]+)$ /hello.get.sh/$1 [PT]
 
+    # Per-host drop-box: all methods go through a single CGI proxy
+    # handler that validates trust + CN-vs-URL-prefix, then forwards to
+    # the loopback mod_dav VH. Must appear BEFORE the catch-all ScriptAlias.
+    ScriptAlias /drop/ {{HANDLERS_DIR}}/drop-proxy.sh/
+
     ScriptAlias / {{HANDLERS_DIR}}/
+</VirtualHost>
+
+# --- loopback mod_dav backend (feature 023) ---------------------------
+# Bound to 127.0.0.1 only — reachable exclusively via the public VH's
+# drop-proxy.sh CGI handler. Serves <data-dir>/drop/<cn>/<rest> via
+# mod_dav_fs. No mTLS here; identity is enforced at the proxy edge.
+<VirtualHost 127.0.0.1:{{DAV_PORT}}>
+    DocumentRoot "{{DATA_DIR}}/drop"
+    AllowEncodedSlashes NoDecode
+
+    <Directory "{{DATA_DIR}}/drop">
+        Options Indexes
+        AllowOverride None
+        Require all granted
+
+        Dav On
+        DavMinTimeout 120
+        AllowDepthInfinity Off
+    </Directory>
+
+    ErrorLog {{DATA_DIR}}/apache/dav-error.log
+    CustomLog {{DATA_DIR}}/apache/dav-access.log combined
 </VirtualHost>

@@ -25,6 +25,7 @@ fi
 
 HOST_NAME="${HOST_NAME:-$(hostname)}"
 SCRIPT_TIMEOUT="${MTLS_SCRIPT_TIMEOUT:-10}"
+DAV_PORT="${DAV_PORT:-$((PORT + 1))}"
 
 mkdir -p "$(dirname "$OUTPUT")"
 mkdir -p "$DATA_DIR/apache"
@@ -85,6 +86,7 @@ sed \
     -e "s|{{HANDLERS_DIR}}|$DATA_DIR/handlers|g" \
     -e "s|{{HOST_NAME}}|$HOST_NAME|g" \
     -e "s|{{SCRIPT_TIMEOUT}}|$SCRIPT_TIMEOUT|g" \
+    -e "s|{{DAV_PORT}}|$DAV_PORT|g" \
     "$SITE_TEMPLATE" > "$SITE_CONF"
 
 MPM_MODULE=""
@@ -120,6 +122,7 @@ load_module_line() {
 cat > "$OUTPUT" <<EOF
 ServerRoot "$DATA_DIR/apache"
 Listen $PORT
+Listen 127.0.0.1:$DAV_PORT
 PidFile "$DATA_DIR/apache/httpd.pid"
 ErrorLog "$DATA_DIR/apache/error.log"
 CustomLog "$DATA_DIR/apache/access.log" combined
@@ -147,6 +150,11 @@ fi
     load_module_line "$MOD_DIR/mod_alias.so"
     load_module_line "$MOD_DIR/mod_ssl.so"
     load_module_line "$MOD_DIR/mod_rewrite.so"
+    # Feature 023: mod_dav + mod_proxy for per-host drop-box.
+    load_module_line "$MOD_DIR/mod_dav.so"
+    load_module_line "$MOD_DIR/mod_dav_fs.so"
+    load_module_line "$MOD_DIR/mod_proxy.so"
+    load_module_line "$MOD_DIR/mod_proxy_http.so"
 } >> "$OUTPUT"
 
 cat >> "$OUTPUT" <<EOF

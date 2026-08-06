@@ -14,20 +14,26 @@ fi
 mkdir -p "$HOME/.local/bin"
 mkdir -p "$HOME/.local/share/mtls-hello"
 mkdir -p "$HOME/.local/share/mtls-hello/scripts"
+mkdir -p "$HOME/.local/share/mtls-hello/drop"
+mkdir -p "$HOME/.local/share/mtls-hello/cli"
 
 install -D -m 755 "$binary" "$HOME/.local/bin/mtls-hello"
 
 HANDLERS_DST="$HOME/.local/share/mtls-hello/handlers"
 if [ -d "$HANDLERS_DST" ]; then
     # Remove the handler scripts we ship, then drop the dir if it is now empty.
-    for h in hello.get.sh head.get.sh spool.get.sh bundle.post.sh cert-echo.get.sh; do
+    for h in hello.get.sh head.get.sh spool.get.sh bundle.post.sh cert-echo.get.sh drop-proxy.sh; do
         remove_file_safe "$HANDLERS_DST/$h"
     done
     rmdir -- "$HANDLERS_DST" || echo "warning: $HANDLERS_DST not empty after removing known handlers" >&2
 fi
 mkdir -p "$HANDLERS_DST"
 cp -p handlers/hello.get.sh handlers/head.get.sh handlers/spool.get.sh \
-    handlers/bundle.post.sh handlers/cert-echo.get.sh "$HANDLERS_DST/"
+    handlers/bundle.post.sh handlers/cert-echo.get.sh handlers/drop-proxy.sh "$HANDLERS_DST/"
+# Install client wrappers.
+for w in cli/_common-cname.sh cli/mtls-*.sh; do
+    cp -p "$w" "$HOME/.local/share/mtls-hello/cli/"
+done
 cp -p scripts/on-discover.sh "$HOME/.local/share/mtls-hello/scripts/on-discover.sh"
 cp -p scripts/sync-common.sh "$HOME/.local/share/mtls-hello/scripts/sync-common.sh"
 cp -p scripts/trust-host.sh "$HOME/.local/share/mtls-hello/scripts/trust-host.sh"
