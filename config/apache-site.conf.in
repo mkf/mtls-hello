@@ -52,6 +52,12 @@
 # drop-proxy.sh CGI handler. Serves <data-dir>/drop/<cn>/<rest> via
 # mod_dav_fs. No mTLS here; identity is enforced at the proxy edge.
 <VirtualHost 127.0.0.1:{{DAV_PORT}}>
+    # mod_dav's locking needs an on-disk lock-db. Without one the loopback VH
+    # 500s on PUT/MOVE/COPY that try to acquire a write lock — concrete proof
+    # in our own dav-error.log on first test run. Path is relative to
+    # ServerRoot (= {{DATA_DIR}}/apache), so an absolute path here is fine.
+    DAVLockDB "{{DATA_DIR}}/apache/dav-lockdb"
+
     DocumentRoot "{{DATA_DIR}}/drop"
     AllowEncodedSlashes NoDecode
 
@@ -62,7 +68,7 @@
 
         Dav On
         DavMinTimeout 120
-        AllowDepthInfinity Off
+
     </Directory>
 
     ErrorLog {{DATA_DIR}}/apache/dav-error.log

@@ -5,7 +5,10 @@
 # client cert fingerprint against <trust_dir>/<cn>.crt (reusing
 # cgi-trust.sh is_trusted()), enforces that the URL's first segment
 # matches the verified CN, then forwards the request to the loopback
-# mod_dav VH at http://127.0.0.1:8444/drop/<cn>/<rest>.
+# mod_dav VH at http://127.0.0.1:8444/<rest>. The loopback VH's
+# DocumentRoot is already "<data-dir>/drop", so we forward WITHOUT
+# re-prefixing /drop/ (otherwise mod_dav ends up writing into
+# "<data-dir>/drop/drop/..." which is what the dav-error.log proves).
 #
 # This is the ONLY piece of custom request-handling code; mod_dav on
 # the loopback VH does all the actual file I/O (PUT/GET/DELETE/MKCOL/
@@ -35,9 +38,14 @@ if [ -z "$cn" ] || [ "$cn" = "unknown" ]; then
 fi
 
 # PATH_INFO is set by ScriptAlias to everything after the script name.
-# For /drop/alice/notes.txt, PATH_INFO = /alice/notes.txt
-path="${PATH_INFO#/}"          # "alice/notes.txt"
-url_cn="${path%%/*}"           # "alice" (first segment)
+# For /drop/alice/notes.txt invoked via "ScriptAlias /drop/ drop-proxy.sh/",
+# PATH_INFO = /alice/notes.txt.
+# We preserve the leading slash here so the loopback URL stays well-formed;
+# the proxy strips /drop/ but mod_dav on the loopback VH needs the leading
+# slash to anchor the path under its DocumentRoot = "<data-dir>/drop".
+path="${PATH_INFO}"            # "/alice.test/notes.txt"
+stripped="${path#/}"           # "alice.test/notes.txt"
+url_cn="${stripped%%/*}"       # "alice.test" (first segment)
 
 if [ -z "$url_cn" ]; then
     cgi_error "400 Bad Request" "No hostname segment in /drop URL"
@@ -55,7 +63,12 @@ fi
 
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="${MTLS_DAV_PORT:-8444}"
-BACKEND="http://${BACKEND_HOST}:${BACKEND_PORT}/drop/${path}"
+# No /drop/ prefix here — the loopback VH's DocumentRoot is already
+# "<data-dir>/drop", so URL /alice.test/notes.txt maps to file
+# <data-dir>/drop/alice.test/notes.txt. Putting /drop/ twice would land
+# at <data-dir>/drop/drop/alice.test/notes.txt (seen in the dav-error.log
+# before this fix).
+BACKEND="http://${BACKEND_HOST}:${BACKEND_PORT}${path}"
 
 method="${REQUEST_METHOD:-GET}"
 
