@@ -34,10 +34,10 @@ The Apache document root for the loopback VH is `<data-dir>/drop/`.
 
 **Purpose**: Remove the bash-handler code from `f668d12` that the mod_dav-first plan explicitly drops in its "Files DELETED" section; reset the sticky working-tree changes; revert `config/apache-site.conf.in`.
 
-- [ ] T001 [P] Delete the bash-handler file group `handlers/drop.{put,get,head,delete,mkcol,copy,move,propfind,options}.sh` (use anchored glob and `scripts/cleanup-common.sh` `remove_file_safe` — never `rm -rf` / `rm -f`; `scripts/cleanup-common.sh` is `source`-able and enforces the safety rule).
-- [ ] T002 [P] Delete `scripts/cgi-dropbox.sh` (the 445-line bash helper module — superseded by `scripts/trust-check.sh` plus mod_dav's native behaviour).
-- [ ] T003 [P] Delete `tests/dropbox.bats` (the 340-line bats unit-test file for `cgi-dropbox.sh` — superseded by the live-Apache Robot tests in Phase 3).
-- [ ] T004 [P] Revert `config/apache-site.conf.in` to its pre-feature state (drop the 9-method-dispatch RewriteRules added at `f668d12`; `git show HEAD:config/apache-site.conf.in` then overwrite the working tree).
+- [X] T001 [P] Delete the bash-handler file group `handlers/drop.{put,get,head,delete,mkcol,copy,move,propfind,options}.sh` (use anchored glob and `scripts/cleanup-common.sh` `remove_file_safe` — never `rm -rf` / `rm -f`; `scripts/cleanup-common.sh` is `source`-able and enforces the safety rule).
+- [X] T002 [P] Delete `scripts/cgi-dropbox.sh` (the 445-line bash helper module — superseded by `scripts/trust-check.sh` plus mod_dav's native behaviour).
+- [X] T003 [P] Delete `tests/dropbox.bats` (the 340-line bats unit-test file for `cgi-dropbox.sh` — superseded by the live-Apache Robot tests in Phase 3).
+- [X] T004 [P] Revert `config/apache-site.conf.in` to its pre-feature state (drop the 9-method-dispatch RewriteRules added at `f668d12`; `git show HEAD:config/apache-site.conf.in` then overwrite the working tree).
 
 **Checkpoint**: `git status` clean of obsolete WIP, was `--`.
 

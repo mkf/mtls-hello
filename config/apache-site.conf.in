@@ -38,35 +38,5 @@
     RewriteRule ^/cert-echo$ /cert-echo.get.sh [PT]
     RewriteRule ^/([^/.]+)$ /hello.get.sh/$1 [PT]
 
-    # Per-host drop-box (/drop/*). Each HTTP method is dispatched to its
-    # own handler script under {{HANDLERS_DIR}}/. The first matching
-    # RewriteRule wins (the [L] flag stops further rewrites), and [PT]
-    # lets the rewrite pass through to the next phase so ScriptAlias /
-    # below can map the rewritten path to a real file.
-    # The CN comes from SSL_CLIENT_S_DN_CN (set above by +ExportCertData);
-    # the handler reads the PathInfo and decides what to do with it.
-    RewriteCond %{REQUEST_METHOD} =PUT        [NC]
-    RewriteRule ^/drop/(.*)$          /drop.put.sh/$1        [PT,L]
-    RewriteCond %{REQUEST_METHOD} =GET        [NC]
-    RewriteRule ^/drop(/)?(.*)$       /drop.get.sh/$2        [PT,L]
-    RewriteCond %{REQUEST_METHOD} =HEAD       [NC]
-    RewriteRule ^/drop/(.*)$          /drop.head.sh/$1       [PT,L]
-    RewriteCond %{REQUEST_METHOD} =DELETE     [NC]
-    RewriteRule ^/drop/(.*)$          /drop.delete.sh/$1     [PT,L]
-    RewriteCond %{REQUEST_METHOD} =MKCOL      [NC]
-    RewriteRule ^/drop/(.*)$          /drop.mkcol.sh/$1      [PT,L]
-    RewriteCond %{REQUEST_METHOD} =COPY       [NC]
-    RewriteRule ^/drop/(.*)$          /drop.copy.sh/$1       [PT,L]
-    RewriteCond %{REQUEST_METHOD} =MOVE       [NC]
-    RewriteRule ^/drop/(.*)$          /drop.move.sh/$1       [PT,L]
-    RewriteCond %{REQUEST_METHOD} =PROPFIND   [NC]
-    RewriteRule ^/drop(/)?(.*)$       /drop.propfind.sh/$2   [PT,L]
-    RewriteCond %{REQUEST_METHOD} =OPTIONS    [NC]
-    RewriteRule ^/drop(/)?(.*)$       /drop.options.sh/$2    [PT,L]
-
-    # MKCOL must reject methods the per-caller partition doesn't accept; the
-    # handler checks the CN and the path. Logged via the standard
-    # access/error logs that already exist above.
-
     ScriptAlias / {{HANDLERS_DIR}}/
 </VirtualHost>
