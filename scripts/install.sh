@@ -84,8 +84,17 @@ fi
 # subcommand names the project actually uses (nncp-toss, nncp-call, nncp-stat,
 # nncp-cfgnew, ...) into <data-dir>/bin/. Idempotent: re-running only refreshes
 # the symlinks if the binary is already present.
+# We pass --data-dir so build-nncp.sh's `-ldflags -X` substitutions bake
+# the per-install DefaultCfgPath / DefaultSpoolPath / DefaultLogPath
+# correctly (per upstream's /tmp/nncp-8.13.0/build convention). When a
+# distro package already provides `nncp-toss` on PATH, build-nncp.sh
+# short-circuits to symlink alignment (per the upstream install page:
+# "Possibly NNCP package already exists for your distribution").
 if [ -d /tmp/nncp-8.13.0 ] && [ -f /tmp/nncp-8.13.0/src/cmd/nncp/main.go ]; then
-    if bash "$(dirname "$0")/build-nncp.sh" --src /tmp/nncp-8.13.0 --dir "$HOME/.local/share/mtls-hello/bin" \
+    if bash "$(dirname "$0")/build-nncp.sh" \
+        --src /tmp/nncp-8.13.0 \
+        --dir "$HOME/.local/share/mtls-hello/bin" \
+        --data-dir "$HOME/.local/share/mtls-hello" \
         >"$HOME/.local/share/mtls-hello/install-buildnncp.log" 2>&1; then
         echo "Built NNCP binary at $HOME/.local/share/mtls-hello/bin/nncp"
     else
@@ -94,6 +103,9 @@ if [ -d /tmp/nncp-8.13.0 ] && [ -f /tmp/nncp-8.13.0/src/cmd/nncp/main.go ]; then
 else
     echo "Note: /tmp/nncp-8.13.0 not present; skipping NNCP build." >&2
     echo "      /nncp/receive/ will return 501 until the binary is installed." >&2
+    if ! command -v nncp-toss >/dev/null 2>&1; then
+        echo "      Distro provider: see http://www.nncpgo.org/Installation.html for packages." >&2
+    fi
 fi
 
 # Migrate a legacy nested certs/ layout to the flat layout (no-op on fresh installs).

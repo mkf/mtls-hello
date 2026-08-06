@@ -423,3 +423,42 @@ bash ~/.local/share/mtls-hello/scripts/merge-spool.sh laptops
 The merge script applies all spooled bundles to the bare repositories,
 promotes branches, and deletes the spool files on success. Bundles with
 missing parent commits are skipped with a clear message.
+
+## NNCP Integration (feature 025)
+
+Feature 025 replaces the standalone `nncp-caller` daemon with a native
+**POST `/nncp/receive/`** endpoint that pipes packets to `nncp-toss`
+directly. A combined Ed25519 / X25519 keypair flows into both the mTLS
+identity certificate and `<data-dir>/nncp.hjson`'s `self:` block — one
+keygen, two identities. Discovery triggers an
+`scripts/on-discovery.d/` directory chain (`00-validate`, `10-trust-add`,
+`20-nncp-register`, `50-bundle-push`, `90-log`) that registers peers
+into both our trust store and the NNCP neighbour table.
+
+**Upstream install guidance** lives at
+<http://www.nncpgo.org/Installation.html>. Distro packages exist for
+Arch AUR, Debian, DragonFly BSD, FreeBSD, Guix, Linux Mint, NetBSD,
+NixOS, Ubuntu, and Void Linux; upstreams's preference is to use the
+distro package when available.
+
+**For Tumbleweed-Slowroll hosts — the project's primary live-run host** —
+no `zypper install nncp` path exists. `scripts/build-nncp.sh` therefore
+builds from `/tmp/nncp-8.13.0` and follows upstream's
+`-ldflags -X go.cypherpunks.su/nncp/v8.DefaultCfgPath=...` pattern so
+`nncp-toss` / `nncp-call` fall back to per-install paths instead of
+`/etc/nncp.hjson` + `/var/spool/nncp`. When a distro package *is* on
+`PATH`, `build-nncp.sh` short-circuits to symlink alignment — we
+respect upstream's "Possibly NNCP package already exists for your
+distribution" recommendation.
+
+The deviation rationale is documented at
+`specs/025-nncp-replace/distro-policy.md`. The install script honours
+three concrete upstream directives:
+- **Go 1.22+ required**: `build-nncp.sh` aborts on earlier `go version`.
+- **Tarball integrity verification**: looks for `*.sha256` /
+  `*.sha256sum` / `SHA256SUMS` next to the source per upstream's
+  "check its integrity and authenticity"; fails closed by default
+  (overridable via `--no-integrity-check`).
+- **`redo` build system**: tried first if `command -v redo` succeeds; falls
+  back to plain `go build` only on hosts without `redo`.
+
