@@ -15,7 +15,7 @@ build_binary
 version="$(project_version)"
 description="$(project_description)"
 pkgroot="$(mktemp -d)"
-trap 'rm -rf "$pkgroot"' EXIT
+trap 'cleanup_pkgroot "$pkgroot"' EXIT
 
 stage_install_tree "$pkgroot"
 
@@ -50,6 +50,6 @@ chmod 755 "$pkgroot/DEBIAN/postinst"
 outdir="${PKG_OUTPUT_DIR:-dist}"
 mkdir -p "$outdir"
 deb="$outdir/mtls-hello_${version}_amd64.deb"
-rm -f "$deb"
+remove_file_safe "$deb"
 dpkg-deb --build "$pkgroot" "$deb"
 echo "Built $deb"

@@ -11,7 +11,28 @@ if [ ! -f "$binary" ]; then
 fi
 
 stage=$(mktemp -d)
-trap 'rm -rf "$stage" "$stage.tar.gz" "$stage.tar.gz.b64" 2>/dev/null || true' EXIT
+
+# Best-effort cleanup of the staging tree we created. Only the known files and
+# directories are removed; leftovers are reported so they can be fixed.
+cleanup_stage() {
+    local s="$1"
+    remove_file_safe "$s.tar.gz" "$s.tar.gz.b64"
+    remove_file_safe "$s"/bin/mtls-hello
+    remove_file_safe "$s"/lib/mtls-hello/*
+    remove_file_safe "$s"/share/mtls-hello/handlers/*
+    remove_file_safe "$s"/share/mtls-hello/scripts/*
+    local d
+    for d in "$s"/share/mtls-hello/handlers "$s"/share/mtls-hello/scripts \
+             "$s"/share/mtls-hello "$s"/lib/mtls-hello "$s"/bin \
+             "$s"/share "$s"/lib; do
+        [ -d "$d" ] || continue
+        rmdir -- "$d" || echo "warning: could not rmdir $d" >&2
+    done
+    rmdir -- "$s" || echo "warning: could not rmdir $s" >&2
+}
+# shellcheck source=scripts/cleanup-common.sh
+. "$(dirname "$0")/cleanup-common.sh"
+trap 'cleanup_stage "$stage"' EXIT
 
 mkdir -p "$stage/bin" "$stage/lib/mtls-hello" "$stage/share/mtls-hello/handlers" "$stage/share/mtls-hello/scripts"
 
@@ -31,7 +52,7 @@ fi
 for lib in libssl.so.3 libcrypto.so.3 libz.so.1 libphobos2-ldc-shared.so.97 libdruntime-ldc-shared.so.97; do
     src=$(find "${GUIX_ENVIRONMENT:-}" /gnu/store -name "$lib" -not -path "*.drv*" -type f,l 2>/dev/null | head -1)
     if [ -n "$src" ]; then
-        rm -f "$stage/lib/mtls-hello/$lib"
+        remove_file_safe "$stage/lib/mtls-hello/$lib"
         cp "$src" "$stage/lib/mtls-hello/$lib"
     else
         echo "Warning: could not find library $lib" >&2
@@ -42,6 +63,7 @@ done
 cp -r handlers "$stage/share/mtls-hello/"
 cp -p scripts/on-discover.sh "$stage/share/mtls-hello/scripts/"
 cp -p scripts/pre-push.sh.new "$stage/share/mtls-hello/scripts/"
+cp -p scripts/migrate-layout.sh "$stage/share/mtls-hello/scripts/"
 
 # Pack and encode the payload.
 tar czf "$stage.tar.gz" -C "$stage" .

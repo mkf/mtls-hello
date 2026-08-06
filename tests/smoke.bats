@@ -2,6 +2,127 @@
 # End-to-end tests for mtls-hello.
 # Each test starts and stops its own server on a scratch port.
 
+# Safe-deletion helpers (no rm -rf / rm -f anywhere).
+# shellcheck source=scripts/cleanup-common.sh
+. scripts/cleanup-common.sh
+
+# Remove a scratch dir containing only generated certs (server/client/evil).
+_remove_cert_dir() {
+    local dir="$1"
+    remove_file_safe "$dir"/server.crt "$dir"/server.key "$dir"/client.crt "$dir"/client.key "$dir"/evil.crt "$dir"/evil.key
+    rmdir -- "$dir" || echo "warning: could not rmdir $dir" >&2
+}
+
+# Remove the Apache data dir layout created by start_server (known structure).
+_remove_apache_dd() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    remove_file_safe "$dir"/apache/httpd.conf "$dir"/apache/site.conf "$dir"/apache/error.log "$dir"/apache/access.log "$dir"/apache/httpd.pid
+    remove_file_safe "$dir"/apache/mime/mime.types
+    rmdir -- "$dir"/apache/mime "$dir"/apache 2>/dev/null || true
+    remove_file_safe "$dir"/handlers/* "$dir"/scripts/*
+    # hosts/ purgatory/ are symlinks (to TRUST_DIR etc.) — remove the link only;
+    # if they are real dirs, the rmdir loop below handles the empty case.
+    for l in hosts purgatory repos; do
+        [ -L "$dir/$l" ] && remove_file_safe "$dir/$l"
+    done
+    local d
+    for d in "$dir"/handlers "$dir"/scripts "$dir"/hosts "$dir"/purgatory "$dir"/repos; do
+        [ -d "$d" ] || continue
+        rmdir -- "$d" || echo "warning: could not rmdir $d" >&2
+    done
+    rmdir -- "$dir" || echo "warning: could not rmdir $dir" >&2
+}
+
+# Remove a git fixture base created by mkfixture_bare:
+#   $base/seed/ (working tree), $base/{local,peer}/*.git (bare repos).
+# Also handles the symlinked variant: $base/real (full fixture) plus
+# $base/{local,peer}/*.git symlinks pointing into real/.
+_remove_fixture_base() {
+    local base="$1"
+    [ -d "$base" ] || return 0
+    # Symlinks in local/ and peer/ (symlinked fixture) — remove the link only.
+    local n
+    for n in alpha beta gamma delta; do
+        remove_file_safe "$base"/local/$n.git "$base"/peer/$n.git "$base"/real/local/$n.git "$base"/real/peer/$n.git
+    done
+    remove_file_safe "$base"/seed/README "$base"/seed/alpha.txt "$base"/seed/beta.txt \
+        "$base"/seed/gamma-local.txt "$base"/seed/gamma-peer.txt "$base"/seed/delta.txt
+    remove_git_repo "$base/seed"
+    remove_git_repo "$base/real/seed"
+    for n in alpha beta gamma delta; do
+        remove_git_repo "$base/local/$n.git"
+        remove_git_repo "$base/peer/$n.git"
+        remove_git_repo "$base/real/local/$n.git"
+        remove_git_repo "$base/real/peer/$n.git"
+    done
+    rmdir -- "$base"/real/local "$base"/real/peer "$base"/real/seed "$base"/real 2>/dev/null || true
+    rmdir -- "$base"/local "$base"/peer "$base"/seed 2>/dev/null || true
+    rmdir -- "$base" || echo "warning: could not rmdir $base" >&2
+}
+
+# Remove a fake HOME populated by `just install` (known installed layout),
+# including any legacy certs/ tree from migration tests.
+_remove_home_dir() {
+    local home="$1"
+    [ -d "$home" ] || return 0
+    local d
+    # Installed files.
+    remove_file_safe "$home"/.local/bin/mtls-hello
+    remove_file_safe "$home"/.local/lib/mtls-hello/*
+    remove_file_safe "$home"/.local/share/mtls-hello/handlers/*
+    remove_file_safe "$home"/.local/share/mtls-hello/scripts/*
+    remove_file_safe "$home"/.local/share/mtls-hello/identity/*
+    remove_file_safe "$home"/.local/share/mtls-hello/certs/certs/server.crt \
+        "$home"/.local/share/mtls-hello/certs/private/server.key
+    remove_file_safe "$home"/.config/systemd/user/mtls-hello.service
+    # Known dirs, bottom-up; leftovers are reported.
+    for d in "$home"/.local/share/mtls-hello/certs/certs "$home"/.local/share/mtls-hello/certs/private \
+             "$home"/.local/share/mtls-hello/certs "$home"/.local/share/mtls-hello/handlers \
+             "$home"/.local/share/mtls-hello/scripts "$home"/.local/share/mtls-hello/identity \
+             "$home"/.local/share/mtls-hello "$home"/.local/lib/mtls-hello "$home"/.local/bin \
+             "$home"/.local/share "$home"/.local/lib "$home"/.local/state "$home"/.local \
+             "$home"/.config/systemd/user "$home"/.config/systemd "$home"/.config; do
+        [ -d "$d" ] || continue
+        rmdir -- "$d" || echo "warning: could not rmdir $d" >&2
+    done
+    rmdir -- "$home" || echo "warning: could not rmdir $home" >&2
+}
+
+# Remove a scratch handlers dir containing only handler scripts we wrote.
+_remove_handlers_dir() {
+    local dir="$1"
+    remove_file_safe "$dir"/cat.post.sh "$dir"/fail.post.sh "$dir"/hello.get.sh "$dir"/echo.get.sh
+    rmdir -- "$dir" || echo "warning: could not rmdir $dir" >&2
+}
+
+# Remove a trust base dir containing only hosts/ + purgatory/ with certs.
+_remove_trust_base() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    remove_file_safe "$dir"/hosts/* "$dir"/purgatory/*
+    rmdir -- "$dir"/hosts "$dir"/purgatory 2>/dev/null || true
+    rmdir -- "$dir" || echo "warning: could not rmdir $dir" >&2
+}
+
+# Remove a discovery data dir (dd1/dd2) with hosts/, purgatory/, scripts/on-discover.sh.
+_remove_disco_dd() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    remove_file_safe "$dir"/scripts/on-discover.sh
+    remove_file_safe "$dir"/hosts/* "$dir"/purgatory/*
+    rmdir -- "$dir"/scripts "$dir"/hosts "$dir"/purgatory 2>/dev/null || true
+    rmdir -- "$dir" || echo "warning: could not rmdir $dir" >&2
+}
+
+# Remove a scratch marker dir (callback scripts + marker files we created).
+_remove_marker_dir() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    remove_file_safe "$dir"/callback.sh "$dir"/marker "$dir"/markers
+    rmdir -- "$dir" || echo "warning: could not rmdir $dir" >&2
+}
+
 export MTLS_PORT="${MTLS_PORT:-18443}"
 
 # Self-extracting installer cache for the installer tests.
@@ -26,11 +147,11 @@ get_self_extract_installer() {
 }
 
 setup_file() {
-  rm -f "$SE_INSTALLER_CACHE" mtls-hello-installer-*.sh 2>/dev/null || true
+  remove_file_safe "$SE_INSTALLER_CACHE" mtls-hello-installer-*.sh
 }
 
 teardown_file() {
-  rm -f "$SE_INSTALLER_CACHE" mtls-hello-installer-*.sh 2>/dev/null || true
+  remove_file_safe "$SE_INSTALLER_CACHE" mtls-hello-installer-*.sh
 }
 
 # Globals for per-test self-signed certificates. Generated in setup().
@@ -63,18 +184,123 @@ start_server() {
   shift || true
   args="$@"
 
-  
-
-  # Ensure the binary is up-to-date; if already built this is a no-op.
+  # Ensure the D binary is up-to-date; if already built this is a no-op.
   dub build --compiler=ldc2 --skip-registry=standard 2>/dev/null || true
 
-  local bin_dir bin_name
+  # Find the Apache binary.
+  local apache_bin
+  apache_bin="$(PATH="/usr/sbin:$PATH" command -v httpd-prefork || command -v httpd || command -v apache2)"
+  if [ -z "$apache_bin" ]; then
+    echo "Error: Apache binary not found (checked httpd-prefork, httpd, apache2)" >&2
+    return 1
+  fi
+
+  # Ensure the test certificates are available.
+  if [ -z "${SERVER_CERT:-}" ] || [ -z "${SERVER_KEY:-}" ]; then
+    mkfixture_certs
+  fi
+
+  # Ensure the test trust dirs are available.
+  if [[ -z "$TRUST_DIR" ]]; then
+    setup_trust_dirs
+  fi
+
+  # Build a self-contained Apache data directory.
+  APACHE_DD="$(mktemp -d)"
+  mkdir -p "$APACHE_DD/handlers" "$APACHE_DD/scripts" "$APACHE_DD/repos"
+
+  # Copy CGI helpers.
+  cp scripts/cgi-trust.sh scripts/cgi-common.sh scripts/log-capture.sh "$APACHE_DD/scripts/"
+
+  # Copy handlers, respecting --handlers-dir if the test passed it.
+  local handlers_dir="handlers"
+  if [[ "$args" =~ --handlers-dir[[:space:]]+([^[:space:]]+) ]]; then
+    handlers_dir="${BASH_REMATCH[1]}"
+  elif [[ "$args" =~ --handlers-dir=([^[:space:]]+) ]]; then
+    handlers_dir="${BASH_REMATCH[1]}"
+  fi
+  cp "$handlers_dir"/*.sh "$APACHE_DD/handlers/" 2>/dev/null || true
+  chmod +x "$APACHE_DD/handlers/"*.sh
+
+  # Link the test trust/purgatory directories into the data dir.
+  remove_file_safe "$APACHE_DD/hosts" "$APACHE_DD/purgatory"
+  ln -s "$TRUST_DIR" "$APACHE_DD/hosts"
+  ln -s "$PURGATORY_DIR" "$APACHE_DD/purgatory"
+
+  # If the test set REPOS_ROOT, expose it to the CGI handlers.
+  if [ -n "${REPOS_ROOT:-}" ]; then
+    remove_file_safe "$APACHE_DD/repos"
+    ln -s "$REPOS_ROOT" "$APACHE_DD/repos"
+  fi
+
+  # Generate the Apache configuration.
+  bash scripts/apache-config.sh "$APACHE_DD" "$port" \
+    "$SERVER_CERT" "$SERVER_KEY" "$APACHE_DD/apache/httpd.conf" >/tmp/mtls-apache-config-$$.log 2>&1
+
+  # Start Apache in a new session so BATS does not wait for its children.
+  SERVER_PID=""
+  setsid "$apache_bin" -f "$APACHE_DD/apache/httpd.conf" >/tmp/mtls-apache-$$.log 2>&1 &
+  SERVER_PID=$!
+
+  # Wait until the port accepts TCP connections.
+  local _i
+  for _i in $(seq 1 100); do
+    if (exec 5<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+      exec 5>&- 5<&- 2>/dev/null || true
+      break
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "Apache died (pid $SERVER_PID) before accepting connections" >&2
+      cat /tmp/mtls-apache-$$.log >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  # Start the discovery daemon unless the test explicitly disabled multicast.
+  DISCO_PID=""
+  if ! echo "$args" | grep -q -- "--no-multicast"; then
+    local binary
+    binary="$(find_mtls_binary)" || return 1
+    DISCO_PID=""
+    CALLBACK_SCRIPT="${CALLBACK_SCRIPT:-}" REPOS_ROOT="${REPOS_ROOT:-}" \
+      setsid "$binary" "$port" \
+      --trust-dir "$TRUST_DIR" \
+      --purgatory-dir "$PURGATORY_DIR" \
+      >/tmp/mtls-disco-$$.log 2>&1 &
+    DISCO_PID=$!
+  fi
+
+  return 0
+}
+
+stop_server() {
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    # Kill the entire Apache process group (setsid made SERVER_PID the leader).
+    kill -TERM -"$SERVER_PID" 2>/dev/null || true
+    sleep 0.3
+    kill -9 -"$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+  fi
+  if [[ -n "${DISCO_PID:-}" ]]; then
+    # Kill the entire discovery daemon process group (setsid made DISCO_PID the leader).
+    kill -TERM -"$DISCO_PID" 2>/dev/null || true
+    sleep 0.3
+    kill -9 -"$DISCO_PID" 2>/dev/null || true
+    DISCO_PID=""
+  fi
+  _remove_apache_dd "${APACHE_DD:-}"
+}
+
+# Locate the built mtls-hello binary. Used by tests that need to start a
+# second server instance (e.g., discovery with certificate capture).
+find_mtls_binary() {
+  local bin_dir bin_name binary
   bin_dir="$(dub describe --data=target-path 2>/dev/null | tail -1)"
   bin_dir="${bin_dir:-.}"
   bin_name="$(dub describe --data=target-name 2>/dev/null | tail -1)"
   bin_name="${bin_name:-mtls-hello}"
-  # Fallback: look for the binary in the current directory.
-  local binary="$bin_dir/$bin_name"
+  binary="$bin_dir/$bin_name"
   if [ ! -x "$binary" ]; then
     binary="$(pwd)/mtls-hello"
   fi
@@ -82,47 +308,7 @@ start_server() {
     echo "Error: cannot find mtls-hello binary (tried $bin_dir/$bin_name and ./mtls-hello)" >&2
     return 1
   fi
-
-  # Ensure the test trust dirs are available (e.g., after an explicit teardown).
-  if [[ -z "$TRUST_DIR" ]]; then
-    setup_trust_dirs
-  fi
-
-  SERVER_PID=""
-  "$binary" "$port" \
-    "$SERVER_CERT" "$SERVER_KEY" \
-    --trust-dir "$TRUST_DIR" \
-    --purgatory-dir "$PURGATORY_DIR" \
-    $args >/tmp/mtls-server-$$.log 2>&1 &
-  SERVER_PID=$!
-
-  # Wait until the port accepts TCP connections.
-  local _i
-  for _i in $(seq 1 100); do
-    # Try bash /dev/tcp first; fall back to nc.
-    if (exec 5<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-      exec 5>&- 5<&- 2>/dev/null || true
-      return 0
-    fi
-    if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$port" 2>/dev/null; then
-      return 0
-    fi
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      echo "server died (pid $SERVER_PID) before accepting connections" >&2
-      cat /tmp/mtls-server-$$.log >&2 || true
-      return 1
-    fi
-    sleep 0.1
-  done
-
-  echo "server failed to start on port $port" >&2
-  cat /tmp/mtls-server-$$.log >&2 || true
-  return 1
-}
-
-stop_server() {
-  [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
-  wait "$SERVER_PID" 2>/dev/null || true
+  echo "$binary"
 }
 
 # Create a fresh trust/purgatory directory pair and seed the trust store with
@@ -150,7 +336,7 @@ setup_trust_dirs() {
 #   (tag) local-tag-v1 on local gamma, missing from peer gamma
 mkfixture_bare() {
   local base="$1"
-  rm -rf "$base"
+  _remove_fixture_base "$base"
   mkdir -p "$base"
 
   local seed="$base/seed"
@@ -228,10 +414,14 @@ mkfixture_bare() {
 
 
 setup() {
+  echo "DEBUG setup start" >&2
   LOCAL_SERVER_PID=""
   mkfixture_certs
+  echo "DEBUG certs done" >&2
   setup_trust_dirs
+  echo "DEBUG trust dirs done" >&2
   start_server
+  echo "DEBUG server started" >&2
 }
 
 teardown() {
@@ -241,14 +431,14 @@ teardown() {
     LOCAL_SERVER_PID=""
   fi
   stop_server
-  rm -rf "$TRUST_BASE_DIR" 2>/dev/null || true
+  _remove_trust_base "$TRUST_BASE_DIR"
   TRUST_DIR=""
   PURGATORY_DIR=""
   TRUST_BASE_DIR=""
 }
 
 @test "rejects clients without a certificate" {
-  run curl -sS --max-time 5 --cacert "$SERVER_CERT" \
+  run curl -sS --fail --max-time 5 --cacert "$SERVER_CERT" \
     "https://localhost:$MTLS_PORT/nope"
   [ "$status" -ne 0 ]
 }
@@ -261,7 +451,7 @@ teardown() {
   run curl -sS --fail --max-time 5 --cacert "$SERVER_CERT" \
     --cert "$tmp/evil.crt" --key "$tmp/evil.key" \
     "https://localhost:$MTLS_PORT/evil" 2>/dev/null
-  rm -rf "$tmp"
+  _remove_cert_dir "$tmp"
   [ "$status" -ne 0 ]
 }
 
@@ -365,7 +555,7 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$output" = "repo=alpha method=GET script=echo" ]
 
-  rm -rf "$handlers"
+  _remove_handlers_dir "$handlers"
 }
 
 @test "executes a POST handler and passes the request body on stdin" {
@@ -385,7 +575,7 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$output" = "hello body" ]
 
-  rm -rf "$handlers"
+  _remove_handlers_dir "$handlers"
 }
 
 @test "GET falls back to echo when no handler matches" {
@@ -435,12 +625,12 @@ teardown() {
     "https://localhost:$MTLS_PORT/fail" 2>/dev/null
   [ "$status" -ne 0 ]
 
-  rm -rf "$handlers"
+  _remove_handlers_dir "$handlers"
 }
 
 mkfixture_bare_symlinked() {
   local base="$1"
-  rm -rf "$base"
+  _remove_fixture_base "$base"
   mkdir -p "$base"
   mkfixture_bare "$base/real" >/dev/null
   mkdir -p "$base/local" "$base/peer"
@@ -471,6 +661,10 @@ mkfixture_bare_symlinked() {
   echo "$output" | grep -q "synced="
   echo "$output" | grep -q "skipped="
 
+  # Apply spooled bundles on the peer side.
+  REPOS_ROOT="$fixture/peer" run bash scripts/merge-spool.sh
+  [ "$status" -eq 0 ]
+
   teardown
   REPOS_ROOT="$fixture/local" start_server "$port" --handlers-dir handlers
 
@@ -481,6 +675,10 @@ mkfixture_bare_symlinked() {
   OUR_KEY="$CLIENT_KEY" \
   REPOS_ROOT="$fixture/peer" \
     run bash scripts/on-discover.sh
+  [ "$status" -eq 0 ]
+
+  # Apply spooled bundles on the local side.
+  REPOS_ROOT="$fixture/local" run bash scripts/merge-spool.sh
   [ "$status" -eq 0 ]
 
   # alpha: local ahead → both sides fast-forwarded to local HEAD.
@@ -506,9 +704,10 @@ mkfixture_bare_symlinked() {
   [ -d "$clone/alpha" ]
   [ "$(git -C "$clone/alpha" rev-parse HEAD)" = "$(git -C "$fixture/local/alpha.git" rev-parse refs/heads/main)" ]
   grep -q "alpha-local" "$clone/alpha/alpha.txt" 2>/dev/null
-  rm -rf "$clone"
+  remove_git_repo "$clone/alpha"
+  rmdir -- "$clone" || echo "warning: could not rmdir $clone" >&2
 
-  rm -rf "$fixture"
+  _remove_fixture_base "$fixture"
 }
 
 @test "US1: bare-repo sync works with fully symlinked REPOS_ROOT" {
@@ -527,6 +726,7 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/local" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/peer" run bash scripts/merge-spool.sh
 
   teardown
   REPOS_ROOT="$fixture/local" start_server "$port" --handlers-dir handlers
@@ -539,6 +739,7 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/peer" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/local" run bash scripts/merge-spool.sh
 
   # Same invariants as the real-directory test.
   [ "$(git -C "$fixture/local/alpha.git" rev-parse refs/heads/main)" = "$(git -C "$fixture/peer/alpha.git" rev-parse refs/heads/main)" ]
@@ -546,7 +747,7 @@ mkfixture_bare_symlinked() {
   [ "$(git -C "$fixture/local/gamma.git" rev-parse refs/heads/main)" != "$(git -C "$fixture/local/gamma.git" rev-parse refs/remotes/peer/main)" ]
   git -C "$fixture/peer/gamma.git" show-ref --verify --quiet refs/tags/local-tag-v1
 
-  rm -rf "$fixture"
+  _remove_fixture_base "$fixture"
 }
 
 @test "US2: broken symlink under REPOS_ROOT fails cleanly" {
@@ -569,6 +770,7 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/local" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/peer" run bash scripts/merge-spool.sh || true
 
   # The broken peer beta causes the push to fail; it must not be synced.
   echo "$output" | grep -q "push failed"
@@ -580,7 +782,7 @@ mkfixture_bare_symlinked() {
   # beta on peer is still broken.
   ! git -C "$fixture/peer/beta.git" rev-parse refs/heads/main >/dev/null 2>&1
 
-  rm -rf "$fixture"
+  _remove_fixture_base "$fixture"
 }
 
 @test "US2: repeated bare-repo sync is idempotent" {
@@ -599,6 +801,7 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/local" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/peer" run bash scripts/merge-spool.sh
 
   teardown
   REPOS_ROOT="$fixture/local" start_server "$port" --handlers-dir handlers
@@ -611,6 +814,7 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/peer" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/local" run bash scripts/merge-spool.sh
 
   local local_alpha_main peer_alpha_main
   local_alpha_main="$(git -C "$fixture/local/alpha.git" rev-parse refs/heads/main)"
@@ -627,6 +831,7 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/local" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/peer" run bash scripts/merge-spool.sh
 
   teardown
   REPOS_ROOT="$fixture/local" start_server "$port" --handlers-dir handlers
@@ -639,11 +844,12 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT="$fixture/peer" \
     run bash scripts/on-discover.sh
   [ "$status" -eq 0 ]
+  REPOS_ROOT="$fixture/local" run bash scripts/merge-spool.sh
 
   [ "$local_alpha_main" = "$(git -C "$fixture/local/alpha.git" rev-parse refs/heads/main)" ]
   [ "$peer_alpha_main" = "$(git -C "$fixture/peer/alpha.git" rev-parse refs/heads/main)" ]
 
-  rm -rf "$fixture"
+  _remove_fixture_base "$fixture"
 }
 
 @test "US1: trusted peer with matching certificate is accepted" {
@@ -670,7 +876,7 @@ mkfixture_bare_symlinked() {
   # Exactly one purgatory entry for the evil hostname.
   [ -f "$PURGATORY_DIR/evil."*.crt ]
 
-  rm -rf "$tmp"
+  _remove_cert_dir "$tmp"
 }
 
 @test "US1: mismatched certificate for trusted hostname is rejected" {
@@ -687,7 +893,7 @@ mkfixture_bare_symlinked() {
 
   [ -f "$PURGATORY_DIR/test-client."*.crt ]
 
-  rm -rf "$tmp"
+  _remove_cert_dir "$tmp"
 }
 
 @test "US2: repeated unknown certificate does not duplicate purgatory entries" {
@@ -708,7 +914,7 @@ mkfixture_bare_symlinked() {
 
   [ "$(ls -1 "$PURGATORY_DIR" | wc -l)" -eq 1 ]
 
-  rm -rf "$tmp"
+  _remove_cert_dir "$tmp"
 }
 
 @test "US2: purgatory certificate does not grant trust" {
@@ -728,7 +934,7 @@ mkfixture_bare_symlinked() {
     "https://localhost:$MTLS_PORT/hello" 2>/dev/null
   [ "$status" -ne 0 ]
 
-  rm -rf "$tmp"
+  _remove_cert_dir "$tmp"
 }
 
 @test "US3: onboarding flow promotes a fresh certificate to trusted" {
@@ -753,7 +959,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "hello" ]
 
-  rm -rf "$tmp"
+  _remove_cert_dir "$tmp"
 }
 
 @test "US1: just install copies binary and handlers to ~/.local" {
@@ -776,7 +982,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ -n "$output" ]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US1: just install is idempotent" {
@@ -795,7 +1001,7 @@ mkfixture_bare_symlinked() {
   [ -x "$home_dir/.local/bin/mtls-hello" ]
   [ -f "$home_dir/.local/share/mtls-hello/handlers/bundle.post.sh" ]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US1: just install creates missing ~/.local directories" {
@@ -803,7 +1009,7 @@ mkfixture_bare_symlinked() {
   command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
-  rm -rf "$home_dir/.local"
+  _remove_home_dir "$home_dir"
 
   export HOME="$home_dir"
   LD_LIBRARY_PATH="" run just install
@@ -812,7 +1018,7 @@ mkfixture_bare_symlinked() {
   [ -d "$home_dir/.local/bin" ]
   [ -d "$home_dir/.local/share/mtls-hello/handlers" ]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US1: just install generates self-signed server cert" {
@@ -825,18 +1031,23 @@ mkfixture_bare_symlinked() {
   LD_LIBRARY_PATH="" run just install
   [ "$status" -eq 0 ]
 
-  [ -f "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" ]
-  [ -f "$home_dir/.local/share/mtls-hello/certs/private/server.key" ]
+  local host_fn
+  host_fn="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -f "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" ]
+  [ -f "$home_dir/.local/share/mtls-hello/identity/$host_fn.key" ]
 
   local subject
-  subject="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" -noout -subject)"
+  subject="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" -noout -subject)"
   [[ "$subject" == *"CN = $(hostname)"* ]]
 
   local mode
-  mode="$(stat -c %a "$home_dir/.local/share/mtls-hello/certs/private/server.key")"
+  mode="$(stat -c %a "$home_dir/.local/share/mtls-hello/identity/$host_fn.key")"
   [ "$mode" = "600" ]
 
-  rm -rf "$home_dir"
+  # Legacy certs/ layout must not exist.
+  [ ! -d "$home_dir/.local/share/mtls-hello/certs" ]
+
+  _remove_home_dir "$home_dir"
 }
 
 @test "US1: just install does not overwrite existing certs" {
@@ -844,6 +1055,9 @@ mkfixture_bare_symlinked() {
   command -v guix >/dev/null || skip "Guix dev environment not available (CI uses Docker)"
   local home_dir
   home_dir="$(mktemp -d)"
+  # Pre-create a legacy certs/ layout; install must migrate it to identity/.
+  local host_fn
+  host_fn="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
   mkdir -p "$home_dir/.local/share/mtls-hello/certs/certs" \
            "$home_dir/.local/share/mtls-hello/certs/private"
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
@@ -858,11 +1072,14 @@ mkfixture_bare_symlinked() {
   LD_LIBRARY_PATH="" run just install
   [ "$status" -eq 0 ]
 
+  # The migrated identity cert must be the same (not overwritten).
   local after
-  after="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" -noout -fingerprint -sha256)"
+  after="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" -noout -fingerprint -sha256)"
   [ "$fingerprint" = "$after" ]
+  # Empty legacy dirs are removed by the migration.
+  [ ! -d "$home_dir/.local/share/mtls-hello/certs" ]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US1: just install warns and skips when openssl is missing" {
@@ -871,7 +1088,7 @@ mkfixture_bare_symlinked() {
   local home_dir fake_bin
   home_dir="$(mktemp -d)"
   fake_bin="$(mktemp -d)"
-  rm -rf "$home_dir/.local"
+  _remove_home_dir "$home_dir"
 
   # Create a fake openssl that is found on PATH but fails to run.
   printf '#!/bin/bash\necho "openssl: command not found" >&2\nexit 1\n' > "$fake_bin/openssl"
@@ -882,17 +1099,21 @@ mkfixture_bare_symlinked() {
   run env PATH="$fake_bin:$PATH" LD_LIBRARY_PATH="" bash scripts/install.sh
   [ "$status" -eq 0 ]
 
-  [ ! -f "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" ]
+  local host_fn
+  host_fn="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
+  [ ! -f "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" ]
   echo "$output" | grep -qi "openssl not found"
 
-  rm -rf "$home_dir" "$fake_bin"
+  _remove_home_dir "$home_dir"
+  remove_file_safe "$fake_bin"/openssl
+  rmdir -- "$fake_bin" || echo "warning: could not rmdir $fake_bin" >&2
 }
 
 @test "US2: --port=0 picks a random port" {
   local port_file log
   port_file="/tmp/mtls-port-$$-test"
   log="/tmp/mtls-server-$$-random.log"
-  rm -f "$port_file"
+  remove_file_safe "$port_file"
 
   ./mtls-hello 0 "$SERVER_CERT" "$SERVER_KEY" \
     --no-multicast --trust-dir "$TRUST_DIR" --purgatory-dir "$PURGATORY_DIR" \
@@ -917,14 +1138,14 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "hello" ]
 
-  rm -f "$port_file" "$log"
+  remove_file_safe "$port_file" "$log"
 }
 
 @test "US2: --port-file writes the port atomically" {
   local port_file log
   port_file="/tmp/mtls-port-$$-test"
   log="/tmp/mtls-server-$$-portfile.log"
-  rm -f "$port_file"
+  remove_file_safe "$port_file"
 
   ./mtls-hello 0 "$SERVER_CERT" "$SERVER_KEY" \
     --no-multicast --trust-dir "$TRUST_DIR" --purgatory-dir "$PURGATORY_DIR" \
@@ -950,7 +1171,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "hello" ]
 
-  rm -f "$port_file" "$log"
+  remove_file_safe "$port_file" "$log"
 }
 
 @test "US2: port 8443 works with self-signed certs" {
@@ -981,7 +1202,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "hello" ]
 
-  rm -f "$log"
+  remove_file_safe "$log"
 }
 
 @test "US3: just install-service creates a valid systemd user unit" {
@@ -1011,7 +1232,7 @@ mkfixture_bare_symlinked() {
     [ "$status" -eq 0 ]
   fi
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US3: just install-service refuses without prior install" {
@@ -1027,7 +1248,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"not found"* ]]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "callback spawn is non-blocking" {
@@ -1050,7 +1271,7 @@ mkfixture_bare_symlinked() {
   done
   [ "$(wc -l < "$marker/markers")" -eq 2 ]
 
-  rm -rf "$marker"
+  _remove_marker_dir "$marker"
 }
 
 @test "missing callback script logs warning and continues" {
@@ -1081,11 +1302,42 @@ mkfixture_bare_symlinked() {
 }
 
 @test "discovered peer triggers on-discover callback" {
-  local marker callback
+  local marker callback peer_dir peer_pid binary peer_port
   marker="$(mktemp -d)"
+  peer_dir="$(mktemp -d)"
   callback="$marker/callback.sh"
-  printf '#!/bin/bash\necho "$PEER_NETLOC $PEER_CERT_FILE" > "%s/marker"\n' "$marker" > "$callback"
+  peer_port=$((10000 + RANDOM % 50000))
+  printf '#!/bin/bash\necho "$PEER_NETLOC $PEER_CERT_FILE" >> "%s/marker"\n' "$marker" > "$callback"
   chmod +x "$callback"
+
+  binary="$(find_mtls_binary)"
+
+  # Start a real peer server on a separate data directory so the local server
+  # can capture its certificate during discovery.
+  mkdir -p "$peer_dir/hosts" "$peer_dir/purgatory" "$peer_dir/scripts"
+  printf '#!/bin/bash\nexit 0\n' > "$peer_dir/scripts/on-discover.sh"
+  chmod +x "$peer_dir/scripts/on-discover.sh"
+
+  HOST_NAME=peer \
+  OUR_CERT="$CLIENT_CERT" \
+  OUR_KEY="$CLIENT_KEY" \
+  "$binary" "$peer_port" "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$peer_dir" >/tmp/mtls-peer-$$.log 2>&1 &
+  peer_pid=$!
+
+  local _i
+  for _i in $(seq 1 100); do
+    if (exec 5<>"/dev/tcp/127.0.0.1/$peer_port") 2>/dev/null; then
+      exec 5>&- 5<&- 2>/dev/null || true
+      break
+    fi
+    if ! kill -0 "$peer_pid" 2>/dev/null; then
+      echo "peer server died before accepting connections" >&2
+      cat /tmp/mtls-peer-$$.log >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
 
   teardown
   CALLBACK_SCRIPT="$callback" \
@@ -1095,18 +1347,175 @@ mkfixture_bare_symlinked() {
   REPOS_ROOT=/tmp \
     start_server "$MTLS_PORT"
 
-  printf '{"service":"mtls-hello","port":9999,"host":"peer"}\n' >/dev/udp/127.0.0.1/4242
-
-  local _i
-  for _i in $(seq 1 50); do
-    [ -f "$marker/marker" ] && break
+  # Wait for the callback to be triggered for the specific peer port.
+  for _i in $(seq 1 100); do
+    if [ -f "$marker/marker" ] && grep -q ":${peer_port}" "$marker/marker"; then
+      break
+    fi
     sleep 0.1
   done
-  [ -f "$marker/marker" ] || { cat /tmp/mtls-server-$$.log; false; }
-  grep -q "127.0.0.1:9999" "$marker/marker"
-  grep -q "$TRUST_DIR/peer.crt" "$marker/marker"
+  [ -f "$marker/marker" ] || { cat /tmp/mtls-server-$$.log; cat /tmp/mtls-peer-$$.log; false; }
+  grep -q ":${peer_port}" "$marker/marker"
+  grep -q "$PURGATORY_DIR/localhost." "$marker/marker"
 
-  rm -rf "$marker"
+  kill "$peer_pid" 2>/dev/null || true
+  wait "$peer_pid" 2>/dev/null || true
+  _remove_marker_dir "$marker"
+  _remove_disco_dd "$peer_dir"
+}
+
+@test "US1: automatically captures peer certificate during discovery" {
+  local dd1 dd2 pid1 pid2 binary
+  dd1="$(mktemp -d)"
+  dd2="$(mktemp -d)"
+  binary="$(find_mtls_binary)"
+  mkdir -p "$dd1/hosts" "$dd1/purgatory" "$dd1/scripts"
+  mkdir -p "$dd2/hosts" "$dd2/purgatory" "$dd2/scripts"
+  printf '#!/bin/bash\nexit 0\n' > "$dd1/scripts/on-discover.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$dd2/scripts/on-discover.sh"
+  chmod +x "$dd1/scripts/on-discover.sh" "$dd2/scripts/on-discover.sh"
+
+  export OUR_CERT="$CLIENT_CERT"
+  export OUR_KEY="$CLIENT_KEY"
+
+  HOST_NAME=peer1 \
+  "$binary" 18501 "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$dd1" --multicast-group=239.255.42.99 --multicast-port=4243 >/tmp/mtls-capture-1-$$.log 2>&1 &
+  pid1=$!
+
+  HOST_NAME=peer2 \
+  "$binary" 18502 "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$dd2" --multicast-group=239.255.42.99 --multicast-port=4243 >/tmp/mtls-capture-2-$$.log 2>&1 &
+  pid2=$!
+
+  local _i
+  for _i in $(seq 1 100); do
+    if (exec 5<>"/dev/tcp/127.0.0.1/18501") 2>/dev/null && (exec 5<>"/dev/tcp/127.0.0.1/18502") 2>/dev/null; then
+      exec 5>&- 5<&- 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+  done
+
+  # Wait for at least one discovery exchange.
+  sleep 7
+
+  local count1 count2
+  count1=$(ls -1 "$dd1/purgatory"/localhost.*.crt 2>/dev/null | wc -l)
+  count2=$(ls -1 "$dd2/purgatory"/localhost.*.crt 2>/dev/null | wc -l)
+  [ "$count1" -ge 1 ]
+  [ "$count2" -ge 1 ]
+
+  kill "$pid1" "$pid2" 2>/dev/null || true
+  ( sleep 5 && kill -9 "$pid1" "$pid2" 2>/dev/null ) &
+  wait "$pid1" 2>/dev/null || true
+  wait "$pid2" 2>/dev/null || true
+  _remove_disco_dd "$dd1"; _remove_disco_dd "$dd2"
+}
+
+@test "US2: repeated discovery does not fill purgatory with duplicates" {
+  local dd1 dd2 pid1 pid2 binary
+  dd1="$(mktemp -d)"
+  dd2="$(mktemp -d)"
+  binary="$(find_mtls_binary)"
+  mkdir -p "$dd1/hosts" "$dd1/purgatory" "$dd1/scripts"
+  mkdir -p "$dd2/hosts" "$dd2/purgatory" "$dd2/scripts"
+  printf '#!/bin/bash\nexit 0\n' > "$dd1/scripts/on-discover.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$dd2/scripts/on-discover.sh"
+  chmod +x "$dd1/scripts/on-discover.sh" "$dd2/scripts/on-discover.sh"
+
+  export OUR_CERT="$CLIENT_CERT"
+  export OUR_KEY="$CLIENT_KEY"
+
+  HOST_NAME=peer1 \
+  "$binary" 18503 "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$dd1" --multicast-group=239.255.42.99 --multicast-port=4243 >/tmp/mtls-dedup-1-$$.log 2>&1 &
+  pid1=$!
+
+  HOST_NAME=peer2 \
+  "$binary" 18504 "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$dd2" --multicast-group=239.255.42.99 --multicast-port=4243 >/tmp/mtls-dedup-2-$$.log 2>&1 &
+  pid2=$!
+
+  local _i
+  for _i in $(seq 1 100); do
+    if (exec 5<>"/dev/tcp/127.0.0.1/18503") 2>/dev/null && (exec 5<>"/dev/tcp/127.0.0.1/18504") 2>/dev/null; then
+      exec 5>&- 5<&- 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+  done
+
+  # Wait for at least two announcement cycles.
+  sleep 12
+
+  local count1 count2
+  count1=$(ls -1 "$dd1/purgatory"/localhost.*.crt 2>/dev/null | wc -l)
+  count2=$(ls -1 "$dd2/purgatory"/localhost.*.crt 2>/dev/null | wc -l)
+  [ "$count1" -eq 1 ]
+  [ "$count2" -eq 1 ]
+
+  kill "$pid1" "$pid2" 2>/dev/null || true
+  ( sleep 5 && kill -9 "$pid1" "$pid2" 2>/dev/null ) &
+  wait "$pid1" 2>/dev/null || true
+  wait "$pid2" 2>/dev/null || true
+  _remove_disco_dd "$dd1"; _remove_disco_dd "$dd2"
+}
+
+@test "US3: captured certificate can be promoted to trust store" {
+  local dd1 dd2 pid1 pid2 binary captured
+  dd1="$(mktemp -d)"
+  dd2="$(mktemp -d)"
+  binary="$(find_mtls_binary)"
+  mkdir -p "$dd1/hosts" "$dd1/purgatory" "$dd1/scripts"
+  mkdir -p "$dd2/hosts" "$dd2/purgatory" "$dd2/scripts"
+  printf '#!/bin/bash\nexit 0\n' > "$dd1/scripts/on-discover.sh"
+  printf '#!/bin/bash\nexit 0\n' > "$dd2/scripts/on-discover.sh"
+  chmod +x "$dd1/scripts/on-discover.sh" "$dd2/scripts/on-discover.sh"
+
+  export OUR_CERT="$CLIENT_CERT"
+  export OUR_KEY="$CLIENT_KEY"
+
+  HOST_NAME=peer1 \
+  "$binary" 18505 "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$dd1" --multicast-group=239.255.42.99 --multicast-port=4243 >/tmp/mtls-trust-1-$$.log 2>&1 &
+  pid1=$!
+
+  HOST_NAME=peer2 \
+  "$binary" 18506 "$SERVER_CERT" "$SERVER_KEY" \
+    --data-dir "$dd2" --multicast-group=239.255.42.99 --multicast-port=4243 >/tmp/mtls-trust-2-$$.log 2>&1 &
+  pid2=$!
+
+  local _i
+  for _i in $(seq 1 100); do
+    if (exec 5<>"/dev/tcp/127.0.0.1/18505") 2>/dev/null && (exec 5<>"/dev/tcp/127.0.0.1/18506") 2>/dev/null; then
+      exec 5>&- 5<&- 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+  done
+
+  sleep 7
+
+  # Promote dd1's captured certificate of peer2 to dd1's trust store.
+  captured=$(ls -1 "$dd1/purgatory"/localhost.*.crt 2>/dev/null | head -1)
+  [ -n "$captured" ]
+  cp "$captured" "$dd1/hosts/localhost.crt"
+
+  # Make an mTLS request to dd1 (server 1) using the server certificate as
+  # the client certificate. dd1 should now trust that certificate.
+  run curl -sS --fail --max-time 5 \
+    --cacert "$SERVER_CERT" \
+    --cert "$SERVER_CERT" --key "$SERVER_KEY" \
+    "https://localhost:18505/promoted"
+  [ "$status" -eq 0 ]
+  [ "$output" = "promoted" ]
+
+  kill "$pid1" "$pid2" 2>/dev/null || true
+  ( sleep 5 && kill -9 "$pid1" "$pid2" 2>/dev/null ) &
+  wait "$pid1" 2>/dev/null || true
+  wait "$pid2" 2>/dev/null || true
+  _remove_disco_dd "$dd1"; _remove_disco_dd "$dd2"
 }
 
 @test "own announcement does not trigger callback" {
@@ -1117,15 +1526,15 @@ mkfixture_bare_symlinked() {
   chmod +x "$callback"
 
   teardown
-  CALLBACK_SCRIPT="$callback" start_server "$MTLS_PORT"
+  CALLBACK_SCRIPT="$callback" start_server "$MTLS_PORT" --multicast-port=4243
 
   # Send an announcement that looks like our own.
-  printf '{"service":"mtls-hello","port":%s,"host":"local"}\n' "$MTLS_PORT" >/dev/udp/127.0.0.1/4242
+  printf '{"service":"mtls-hello","port":%s,"host":"local"}\n' "$MTLS_PORT" >/dev/udp/127.0.0.1/4243
 
   sleep 2
   [ ! -f "$marker/marker" ]
 
-  rm -rf "$marker"
+  _remove_marker_dir "$marker"
 }
 
 @test "data-dir derives handlers path" {
@@ -1144,7 +1553,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "from-data-dir" ]
 
-  rm -rf "$data_dir"
+  _remove_disco_dd "$data_dir"
 }
 
 @test "data-dir derives callback path" {
@@ -1166,7 +1575,7 @@ mkfixture_bare_symlinked() {
   [ -f "$data_dir/marker" ]
   grep -q "127.0.0.1:9999" "$data_dir/marker"
 
-  rm -rf "$data_dir"
+  _remove_disco_dd "$data_dir"
 }
 
 @test "explicit --handlers-dir overrides data-dir" {
@@ -1188,7 +1597,9 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "from-custom" ]
 
-  rm -rf "$data_dir" "$custom"
+  _remove_disco_dd "$data_dir"
+  remove_file_safe "$custom"/hello.get.sh
+  rmdir -- "$custom" || echo "warning: could not rmdir $custom" >&2
 }
 
 @test "no --data-dir preserves existing defaults" {
@@ -1206,7 +1617,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
   [ "$output" = "explicit-handlers" ]
 
-  rm -rf "$handlers"
+  _remove_handlers_dir "$handlers"
 }
 
 @test "US1: just self-extract produces a named script" {
@@ -1230,7 +1641,7 @@ mkfixture_bare_symlinked() {
   [[ "$installer" == *"-dirty.sh" ]]
   # Do not delete the installer here — filenames are deterministic and the
   # cached installer would disappear. teardown_file removes all installers.
-  rm -f "$dirty_file"
+  remove_file_safe "$dirty_file"
 }
 
 @test "US1: self-extracting script --help prints usage" {
@@ -1257,18 +1668,20 @@ mkfixture_bare_symlinked() {
   [ -f "$home_dir/.local/share/mtls-hello/handlers/bundle.post.sh" ]
   [ -f "$home_dir/.local/share/mtls-hello/scripts/on-discover.sh" ]
   [ -f "$home_dir/.local/share/mtls-hello/scripts/pre-push.sh.new" ]
-  [ -f "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" ]
-  [ -f "$home_dir/.local/share/mtls-hello/certs/private/server.key" ]
+  local host_fn
+  host_fn="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -f "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" ]
+  [ -f "$home_dir/.local/share/mtls-hello/identity/$host_fn.key" ]
 
   local mode
-  mode="$(stat -c %a "$home_dir/.local/share/mtls-hello/certs/private/server.key")"
+  mode="$(stat -c %a "$home_dir/.local/share/mtls-hello/identity/$host_fn.key")"
   [ "$mode" = "600" ]
 
   run LD_LIBRARY_PATH="$home_dir/.local/lib/mtls-hello" "$home_dir/.local/bin/mtls-hello" --version
   [ "$status" -eq 0 ]
   [ -n "$output" ]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US2: installer install does not overwrite existing certs" {
@@ -1283,6 +1696,8 @@ mkfixture_bare_symlinked() {
     -out "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" \
     -subj "/CN=existing" >/dev/null 2>&1
   chmod 600 "$home_dir/.local/share/mtls-hello/certs/private/server.key"
+  local host_fn
+  host_fn="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
   local fingerprint
   fingerprint="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" -noout -fingerprint -sha256)"
 
@@ -1291,10 +1706,11 @@ mkfixture_bare_symlinked() {
   [ "$status" -eq 0 ]
 
   local after
-  after="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" -noout -fingerprint -sha256)"
+  after="$(openssl x509 -in "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" -noout -fingerprint -sha256)"
   [ "$fingerprint" = "$after" ]
+  [ ! -d "$home_dir/.local/share/mtls-hello/certs" ]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US2: installer install warns but succeeds without openssl" {
@@ -1310,10 +1726,14 @@ mkfixture_bare_symlinked() {
   run env LD_LIBRARY_PATH="" PATH="$fake_bin:/usr/bin:/bin" bash "$(get_self_extract_installer)" install
   [ "$status" -eq 0 ]
 
-  [ ! -f "$home_dir/.local/share/mtls-hello/certs/certs/server.crt" ]
+  local host_fn
+  host_fn="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
+  [ ! -f "$home_dir/.local/share/mtls-hello/identity/$host_fn.crt" ]
   echo "$output" | grep -qi "openssl not found"
 
-  rm -rf "$home_dir" "$fake_bin"
+  _remove_home_dir "$home_dir"
+  remove_file_safe "$fake_bin"/openssl
+  rmdir -- "$fake_bin" || echo "warning: could not rmdir $fake_bin" >&2
 }
 
 @test "US3: installer install-service creates a valid unit" {
@@ -1340,7 +1760,7 @@ mkfixture_bare_symlinked() {
     [ "$status" -eq 0 ]
   fi
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US3: installer install-service refuses without prior install" {
@@ -1355,7 +1775,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"not found"* ]]
 
-  rm -rf "$home_dir"
+  _remove_home_dir "$home_dir"
 }
 
 @test "US3: package.sh detects debian via /etc/os-release" {
@@ -1365,7 +1785,8 @@ mkfixture_bare_symlinked() {
   OS_RELEASE_FILE="$tmp/os-release" run bash scripts/package.sh --detect
   [ "$status" -eq 0 ]
   [ "$output" = "debian" ]
-  rm -rf "$tmp"
+  remove_file_safe "$tmp"/os-release
+  rmdir -- "$tmp" || echo "warning: could not rmdir $tmp" >&2
 }
 
 @test "US3: package.sh detects arch via /etc/os-release" {
@@ -1375,7 +1796,8 @@ mkfixture_bare_symlinked() {
   OS_RELEASE_FILE="$tmp/os-release" run bash scripts/package.sh --detect
   [ "$status" -eq 0 ]
   [ "$output" = "arch" ]
-  rm -rf "$tmp"
+  remove_file_safe "$tmp"/os-release
+  rmdir -- "$tmp" || echo "warning: could not rmdir $tmp" >&2
 }
 
 @test "US3: package.sh rejects unsupported distro" {
@@ -1386,5 +1808,7 @@ mkfixture_bare_symlinked() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"unsupported"* ]]
   [[ "$output" == *"package-docker"* ]]
-  rm -rf "$tmp"
+  remove_file_safe "$tmp"/os-release
+  rmdir -- "$tmp" || echo "warning: could not rmdir $tmp" >&2
 }
+

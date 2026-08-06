@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Safe-deletion helpers (no rm -rf / rm -f anywhere).
+# shellcheck source=scripts/cleanup-common.sh
+. "$(dirname "$0")/cleanup-common.sh"
+
 # Clear any inherited library path. The script uses host utilities (sed, tar,
 # openssl, cp, mkdir) and must not link them against a foreign libc. The
 # installed binary gets its library path from the systemd unit or the operator.
@@ -16,10 +20,23 @@ usage() {
 extract_payload() {
     if [ -z "${_SE_PAYLOAD_DIR:-}" ]; then
         _SE_PAYLOAD_DIR=$(mktemp -d)
-        # Remove payload dir on exit, unless we are in the middle of a failed
-        # command where the shell will already be exiting. The explicit trap
-        # avoids leaking the tar extraction directory in normal flows.
-        trap 'rm -rf "$_SE_PAYLOAD_DIR"' EXIT
+        # Best-effort removal of the extracted payload tree on exit. Only the
+        # known payload contents are removed; leftovers are reported.
+        cleanup_payload() {
+            remove_file_safe "$_SE_PAYLOAD_DIR"/bin/mtls-hello
+            remove_file_safe "$_SE_PAYLOAD_DIR"/lib/mtls-hello/*
+            remove_file_safe "$_SE_PAYLOAD_DIR"/share/mtls-hello/handlers/*
+            remove_file_safe "$_SE_PAYLOAD_DIR"/share/mtls-hello/scripts/*
+            local d
+            for d in "$_SE_PAYLOAD_DIR"/share/mtls-hello/handlers "$_SE_PAYLOAD_DIR"/share/mtls-hello/scripts \
+                     "$_SE_PAYLOAD_DIR"/share/mtls-hello "$_SE_PAYLOAD_DIR"/lib/mtls-hello \
+                     "$_SE_PAYLOAD_DIR"/bin "$_SE_PAYLOAD_DIR"/share "$_SE_PAYLOAD_DIR"/lib; do
+                [ -d "$d" ] || continue
+                rmdir -- "$d" || echo "warning: could not rmdir $d" >&2
+            done
+            rmdir -- "$_SE_PAYLOAD_DIR" || echo "warning: could not rmdir $_SE_PAYLOAD_DIR" >&2
+        }
+        trap 'cleanup_payload' EXIT
         sed '1,/^__PAYLOAD__$/d' "$0" | base64 -d | tar xz -C "$_SE_PAYLOAD_DIR"
     fi
 }
@@ -35,39 +52,51 @@ do_install() {
 
     install -D -m 755 "$_SE_PAYLOAD_DIR/bin/mtls-hello" "$dst_bin/mtls-hello"
 
-    rm -rf "$dst_lib"/*
+    # Remove the previously vendored libraries (known names), then copy new ones.
+    remove_file_safe "$dst_lib"/libssl.so.3 "$dst_lib"/libcrypto.so.3 "$dst_lib"/libz.so.1
     cp -P "$_SE_PAYLOAD_DIR/lib/mtls-hello/"* "$dst_lib/"
 
-    if [ -d "$dst_share/handlers" ]; then
-        rm -rf "$dst_share/handlers"
-    fi
-    cp -r "$_SE_PAYLOAD_DIR/share/mtls-hello/handlers" "$dst_share/"
+    # Refresh handlers: remove the handler scripts we ship, then copy them in.
+    for h in hello.get.sh head.get.sh spool.get.sh bundle.post.sh cert-echo.get.sh; do
+        remove_file_safe "$dst_share/handlers/$h"
+    done
+    cp -p "$_SE_PAYLOAD_DIR/share/mtls-hello/handlers/"*.sh "$dst_share/handlers/"
 
-    if [ -d "$dst_share/scripts" ]; then
-        rm -rf "$dst_share/scripts"
-    fi
-    cp -r "$_SE_PAYLOAD_DIR/share/mtls-hello/scripts" "$dst_share/"
+    # Refresh scripts: remove the known shipped scripts (never user hooks), then copy.
+    for s in on-discover.sh sync-common.sh trust-host.sh merge-spool.sh \
+             cgi-trust.sh log-capture.sh cgi-common.sh apache-config.sh \
+             migrate-layout.sh sync-state.sh pre-push.sh.new; do
+        remove_file_safe "$dst_share/scripts/$s"
+    done
+    cp -p "$_SE_PAYLOAD_DIR/share/mtls-hello/scripts/"* "$dst_share/scripts/"
 
-    # Generate self-signed server certificate on first install if missing.
-    mkdir -p "$dst_share/certs/certs" "$dst_share/certs/private"
-    if [ ! -f "$dst_share/certs/certs/server.crt" ]; then
+    # Generate a self-signed identity certificate on first install if missing.
+    _host="$(hostname)"
+    _host_fn="$(printf '%s' "$_host" | tr -c 'A-Za-z0-9._-' '_')"
+    mkdir -p "$dst_share/identity"
+    if [ ! -f "$dst_share/identity/$_host_fn.crt" ]; then
         if ! openssl version >/dev/null 2>&1; then
-            echo "Warning: openssl not found; cannot generate self-signed server certificate." >&2
+            echo "Warning: openssl not found; cannot generate self-signed identity certificate." >&2
             echo "Install openssl or provide certificates manually." >&2
         else
             openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-                -keyout "$dst_share/certs/private/server.key" \
-                -out "$dst_share/certs/certs/server.crt" \
-                -subj "/CN=$(hostname)" >/dev/null 2>&1
-            chmod 600 "$dst_share/certs/private/server.key"
-            echo "Generated self-signed server certificate for $(hostname)"
+                -keyout "$dst_share/identity/$_host_fn.key" \
+                -out "$dst_share/identity/$_host_fn.crt" \
+                -subj "/CN=$_host" >/dev/null 2>&1
+            chmod 600 "$dst_share/identity/$_host_fn.key"
+            echo "Generated self-signed identity certificate for $_host"
         fi
+    fi
+
+    # Migrate a legacy nested certs/ layout to the flat layout (no-op on fresh installs).
+    if [ -f "$dst_share/scripts/migrate-layout.sh" ]; then
+        bash "$dst_share/scripts/migrate-layout.sh" "$dst_share" "$_host" || true
     fi
 
     echo "Installed mtls-hello to $dst_bin/mtls-hello"
     echo "Installed handlers to $dst_share/handlers/"
     echo "Installed hook templates to $dst_share/scripts/"
-    echo "Installed certificates to $dst_share/certs/"
+    echo "Installed certificates to $dst_share/identity/"
     echo
     echo "To activate a hook: cp <name>.new <name> && chmod +x <name>"
     echo "Re-running install overwrites .new files but preserves your custom files."
@@ -99,10 +128,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=LD_LIBRARY_PATH=%h/.local/lib/mtls-hello
+Environment=OUR_CERT=%h/.local/share/mtls-hello/identity/%H.crt
+Environment=OUR_KEY=%h/.local/share/mtls-hello/identity/%H.key
 ExecStart=%h/.local/bin/mtls-hello \
   0 \
-  %h/.local/share/mtls-hello/certs/certs/server.crt \
-  %h/.local/share/mtls-hello/certs/private/server.key \
   --port=0 --port-file=%t/mtls-hello.port \
   --data-dir=%h/.local/share/mtls-hello
 ExecStartPost=/bin/sh -c 'echo "mtls-hello listening on port $(cat %t/mtls-hello.port)"'

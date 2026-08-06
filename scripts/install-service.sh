@@ -12,21 +12,20 @@ mkdir -p "$unit_dir"
 
 cat > "$unit_dir/mtls-hello.service" <<'EOF'
 [Unit]
-Description=mtls-hello mutual-TLS server
+Description=mtls-hello discovery daemon
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 Environment=LD_LIBRARY_PATH=%h/.local/lib/mtls-hello
-Environment=OUR_CERT=%h/.local/share/mtls-hello/certs/certs/server.crt
-Environment=OUR_KEY=%h/.local/share/mtls-hello/certs/private/server.key
+Environment=OUR_CERT=%h/.local/share/mtls-hello/identity/%H.crt
+Environment=OUR_KEY=%h/.local/share/mtls-hello/identity/%H.key
 Environment=REPOS_ROOT=%h/.local/state/REPOS_ROOT
+Environment=CALLBACK_SCRIPT=%h/.local/share/mtls-hello/scripts/on-discover.sh
 ExecStart=%h/.local/bin/mtls-hello \
-  0 \
-  --port=0 --port-file=%t/mtls-hello.port \
+  8443 \
   --data-dir=%h/.local/share/mtls-hello
-ExecStartPost=/bin/sh -c 'echo "mtls-hello listening on port $(cat %t/mtls-hello.port)"'
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal

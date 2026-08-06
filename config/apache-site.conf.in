@@ -1,0 +1,72 @@
+<VirtualHost *:{{PORT}}>
+    ServerName localhost
+
+    SSLEngine on
+    SSLCertificateFile {{SERVER_CERT}}
+    SSLCertificateKeyFile {{SERVER_KEY}}
+
+    SSLVerifyClient optional_no_ca
+    SSLOptions +StdEnvVars +ExportCertData
+
+    ErrorLog {{DATA_DIR}}/apache/error.log
+    CustomLog {{DATA_DIR}}/apache/access.log combined
+
+    # Centralized client-certificate capture via a piped logger.
+    # Apache escapes the PEM's newlines as literal "\n", so each request is one line:
+    #   <subject_dn>\t<ssl_verify>\t<cert-escaped>\tCERTEND
+    LogFormat "%{SSL_CLIENT_S_DN}e\t%{SSL_CLIENT_VERIFY}e\t%{SSL_CLIENT_CERT}e\tCERTEND" mtls_cert_fmt
+    CustomLog "|{{DATA_DIR}}/scripts/log-capture.sh {{TRUST_DIR}} {{PURGATORY_DIR}}" mtls_cert_fmt
+
+    SetEnv MTLS_DATA_DIR {{DATA_DIR}}
+    SetEnv MTLS_TRUST_DIR {{TRUST_DIR}}
+    SetEnv MTLS_PURGATORY_DIR {{PURGATORY_DIR}}
+    SetEnv MTLS_HANDLERS_DIR {{HANDLERS_DIR}}
+    SetEnv MTLS_HOST_NAME {{HOST_NAME}}
+    SetEnv MTLS_SCRIPT_TIMEOUT {{SCRIPT_TIMEOUT}}
+    SetEnv MTLS_REPOS_ROOT {{DATA_DIR}}/repos
+
+    <Directory "{{HANDLERS_DIR}}">
+        Options +ExecCGI
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    RewriteEngine On
+    RewriteRule ^/head$ /head.get.sh [PT]
+    RewriteRule ^/spool$ /spool.get.sh [PT]
+    RewriteRule ^/bundle$ /bundle.post.sh [PT]
+    RewriteRule ^/cert-echo$ /cert-echo.get.sh [PT]
+    RewriteRule ^/([^/.]+)$ /hello.get.sh/$1 [PT]
+
+    # Per-host drop-box (/drop/*). Each HTTP method is dispatched to its
+    # own handler script under {{HANDLERS_DIR}}/. The first matching
+    # RewriteRule wins (the [L] flag stops further rewrites), and [PT]
+    # lets the rewrite pass through to the next phase so ScriptAlias /
+    # below can map the rewritten path to a real file.
+    # The CN comes from SSL_CLIENT_S_DN_CN (set above by +ExportCertData);
+    # the handler reads the PathInfo and decides what to do with it.
+    RewriteCond %{REQUEST_METHOD} =PUT        [NC]
+    RewriteRule ^/drop/(.*)$          /drop.put.sh/$1        [PT,L]
+    RewriteCond %{REQUEST_METHOD} =GET        [NC]
+    RewriteRule ^/drop(/)?(.*)$       /drop.get.sh/$2        [PT,L]
+    RewriteCond %{REQUEST_METHOD} =HEAD       [NC]
+    RewriteRule ^/drop/(.*)$          /drop.head.sh/$1       [PT,L]
+    RewriteCond %{REQUEST_METHOD} =DELETE     [NC]
+    RewriteRule ^/drop/(.*)$          /drop.delete.sh/$1     [PT,L]
+    RewriteCond %{REQUEST_METHOD} =MKCOL      [NC]
+    RewriteRule ^/drop/(.*)$          /drop.mkcol.sh/$1      [PT,L]
+    RewriteCond %{REQUEST_METHOD} =COPY       [NC]
+    RewriteRule ^/drop/(.*)$          /drop.copy.sh/$1       [PT,L]
+    RewriteCond %{REQUEST_METHOD} =MOVE       [NC]
+    RewriteRule ^/drop/(.*)$          /drop.move.sh/$1       [PT,L]
+    RewriteCond %{REQUEST_METHOD} =PROPFIND   [NC]
+    RewriteRule ^/drop(/)?(.*)$       /drop.propfind.sh/$2   [PT,L]
+    RewriteCond %{REQUEST_METHOD} =OPTIONS    [NC]
+    RewriteRule ^/drop(/)?(.*)$       /drop.options.sh/$2    [PT,L]
+
+    # MKCOL must reject methods the per-caller partition doesn't accept; the
+    # handler checks the CN and the path. Logged via the standard
+    # access/error logs that already exist above.
+
+    ScriptAlias / {{HANDLERS_DIR}}/
+</VirtualHost>

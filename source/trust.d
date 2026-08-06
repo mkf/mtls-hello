@@ -8,7 +8,8 @@
 module trust;
 
 import vibe.core.log;
-import vibe.http.server;
+import vibe.core.net : connectTCP;
+import vibe.stream.openssl;
 import vibe.stream.tls;
 
 import deimos.openssl.bio;
@@ -16,6 +17,7 @@ import deimos.openssl.evp;
 import deimos.openssl.pem;
 import deimos.openssl.x509;
 
+import std.datetime : seconds;
 import std.digest.sha;
 import std.file;
 import std.format;
@@ -25,90 +27,10 @@ import std.uni : toLower;
 
 struct TrustConfig
 {
-	string trustDir = "certs/hosts";
-	string purgatoryDir = "certs/purgatory";
-}
-
-enum TrustOutcome
-{
-	trusted,
-	unknown,
-	mismatch,
-	expired,
-	invalidName
-}
-
-struct TrustDecision
-{
-	TrustOutcome outcome;
-	string hostname;
-	string fingerprint;
-	string trustPath;
-	string purgatoryPath;
-}
-
-/// Decide whether a peer is trusted. This runs inside the request handler;
-/// the client certificate is only valid for the lifetime of the TLS stream, so
-/// the fingerprint/PEM are extracted eagerly here.
-TrustDecision evaluateTrust(scope HTTPServerRequest req, ref const(TrustConfig) cfg) @trusted
-{
-	auto certInfo = req.clientCertificate;
-	string hostname = hostnameFromCertificate(certInfo);
-
-	if (hostname.empty)
-		return TrustDecision(TrustOutcome.invalidName, "", "");
-
-	string pem = x509ToPEM(certInfo._x509);
-	if (pem.empty)
-		return TrustDecision(TrustOutcome.unknown, hostname, "");
-
-	string fingerprint = x509Fingerprint(certInfo._x509);
-	if (fingerprint.empty)
-		return TrustDecision(TrustOutcome.unknown, hostname, "");
-
-	string trustPath = buildPath(cfg.trustDir, hostname ~ ".crt");
-	if (exists(trustPath))
-	{
-		string storedFingerprint = loadTrustedCertFingerprint(trustPath);
-		if (storedFingerprint == fingerprint)
-			return TrustDecision(TrustOutcome.trusted, hostname, fingerprint, trustPath);
-		else
-		{
-			auto decision = TrustDecision(TrustOutcome.mismatch, hostname, fingerprint, trustPath);
-			decision.purgatoryPath = capturePurgatory(cfg.purgatoryDir, hostname, pem, fingerprint);
-			return decision;
-		}
-	}
-
-	auto decision = TrustDecision(TrustOutcome.unknown, hostname, fingerprint, trustPath);
-	decision.purgatoryPath = capturePurgatory(cfg.purgatoryDir, hostname, pem, fingerprint);
-	return decision;
-}
-
-/// Log a trust decision with hostname, fingerprint, and reason. For unknown or
-/// mismatched peers, also log the purgatory path so the operator can review.
-void logTrustDecision(ref const(TrustDecision) decision) @safe
-{
-	final switch (decision.outcome)
-	{
-		case TrustOutcome.trusted:
-			logInfo("trust: trusted hostname=%s fingerprint=%s", decision.hostname, decision.fingerprint);
-			break;
-		case TrustOutcome.unknown:
-			logWarn("trust: unknown hostname=%s fingerprint=%s purgatory=%s",
-				decision.hostname, decision.fingerprint, decision.purgatoryPath);
-			break;
-		case TrustOutcome.mismatch:
-			logWarn("trust: mismatch hostname=%s fingerprint=%s trustPath=%s purgatory=%s",
-				decision.hostname, decision.fingerprint, decision.trustPath, decision.purgatoryPath);
-			break;
-		case TrustOutcome.expired:
-			logWarn("trust: expired hostname=%s fingerprint=%s", decision.hostname, decision.fingerprint);
-			break;
-		case TrustOutcome.invalidName:
-			logWarn("trust: invalid-name (no usable hostname)");
-			break;
-	}
+	string trustDir = "hosts";
+	string purgatoryDir = "purgatory";
+	bool trustDirExplicit;
+	bool purgatoryDirExplicit;
 }
 
 /// Extract the hostname from the certificate's subject name. The common name
@@ -208,6 +130,141 @@ private X509* pemToX509(string pem) @trusted
 	X509* cert = null;
 	cert = PEM_read_bio_X509(bio, &cert, null, null);
 	return cert;
+}
+
+struct PeerCertificateCapture
+{
+	string hostname;
+	string fingerprint;
+	string pem;
+	string purgatoryPath;
+}
+
+/// Detect and capture the certificate presented by a peer during an outbound
+/// mTLS connection. The captured certificate is stored in purgatory keyed by
+/// hostname and fingerprint, which makes repeated captures idempotent.
+/// Returns the capture result; purgatoryPath is empty on failure or when the
+/// certificate has no usable hostname.
+PeerCertificateCapture detectPeerCertificate(string peerHost, ushort peerPort,
+	string ourCert, string ourKey, string purgatoryDir) @trusted
+{
+	auto result = PeerCertificateCapture();
+	if (peerHost.empty || ourCert.empty || ourKey.empty || purgatoryDir.empty)
+		return result;
+
+	try
+	{
+		auto conn = connectTCP(peerHost, peerPort, null, 0, 5.seconds);
+		auto ctx = createTLSContext(TLSContextKind.client);
+		ctx.useCertificateChainFile(ourCert);
+		ctx.usePrivateKeyFile(ourKey);
+		ctx.peerValidationMode = TLSPeerValidationMode.requireCert;
+
+		auto stream = createTLSStream(conn, ctx);
+		auto certInfo = stream.peerCertificate;
+
+		result.hostname = hostnameFromCertificate(certInfo);
+		if (result.hostname.empty)
+			return result;
+
+		result.pem = x509ToPEM(certInfo._x509);
+		if (result.pem.empty)
+			return result;
+
+		result.fingerprint = x509Fingerprint(certInfo._x509);
+		if (result.fingerprint.empty)
+			return result;
+
+		result.purgatoryPath = capturePurgatory(purgatoryDir, result.hostname,
+			result.pem, result.fingerprint);
+	}
+	catch (Exception e)
+	{
+		logWarn("trust: failed to detect peer certificate from %s:%d: %s",
+			peerHost, peerPort, e.msg);
+	}
+
+	return result;
+}
+
+/// Public wrapper for purgatory capture that documents the idempotent
+/// deduplication contract. Same hostname + fingerprint always yields the
+/// same filesystem path; repeated calls overwrite the same file.
+string captureOrFindPurgatory(string purgatoryDir, string hostname, string pem, string fingerprint) @trusted
+{
+	return capturePurgatory(purgatoryDir, hostname, pem, fingerprint);
+}
+
+private void safeRmdirRecurse(string path) nothrow
+{
+	try { rmdirRecurse(path); } catch (Exception) {}
+}
+
+unittest
+{
+	import std.file : exists, readText, tempDir;
+	import std.path : buildPath;
+
+	auto purgDir = buildPath(tempDir(), "mtls-purgatory-test");
+	scope (exit) safeRmdirRecurse(purgDir);
+
+	string pem = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n";
+	string fp = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+	auto path = captureOrFindPurgatory(purgDir, "testhost", pem, fp);
+	assert(path.length > 0, "capture path should not be empty");
+	assert(exists(path), "capture path should exist");
+	assert(readText(path) == pem, "captured PEM should match");
+
+	// Second capture with the same hostname and fingerprint must return the
+	// same path and must not create a duplicate file.
+	auto path2 = captureOrFindPurgatory(purgDir, "testhost", pem, fp);
+	assert(path2 == path, "same fingerprint must not create a duplicate file");
+}
+
+unittest
+{
+	import vibe.stream.tls : TLSCertificateInformation;
+
+	auto certInfo = TLSCertificateInformation();
+	certInfo.subjectName.addField("commonName", "unittest-host");
+	assert(hostnameFromCertificate(certInfo) == "unittest-host");
+}
+
+unittest
+{
+	import std.file : exists, readText, tempDir, write;
+	import std.path : buildPath;
+	import std.process : executeShell;
+	import std.string : indexOf;
+
+	auto dir = buildPath(tempDir(), "mtls-cert-test");
+	scope (exit) safeRmdirRecurse(dir);
+	mkdirRecurse(dir);
+
+	auto keyPath = buildPath(dir, "key.pem");
+	auto certPath = buildPath(dir, "cert.pem");
+
+	auto res = executeShell(
+		"openssl req -x509 -newkey rsa:2048 -nodes -days 1 " ~
+		"-keyout '" ~ keyPath ~ "' -out '" ~ certPath ~ "' -subj '/CN=unittest-host' >/dev/null 2>&1");
+	assert(res.status == 0, "openssl cert generation failed: " ~ res.output);
+
+	auto pem = readText(certPath);
+	auto cert = pemToX509(pem);
+	assert(cert !is null, "pemToX509 should parse the generated cert");
+	scope (exit)
+	{
+		import deimos.openssl.x509 : X509_free;
+		X509_free(cert);
+	}
+
+	string fp = x509Fingerprint(cert);
+	assert(fp.length == 64, "fingerprint should be 64 hex chars");
+
+	string pem2 = x509ToPEM(cert);
+	assert(pem2.length > 0, "x509ToPEM should produce PEM");
+	assert(pem2.indexOf("BEGIN CERTIFICATE") >= 0, "PEM should contain certificate header");
 }
 
 /// Capture a rejected certificate into purgatory. The filename is keyed by

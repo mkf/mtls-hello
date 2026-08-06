@@ -12,11 +12,34 @@ dist/
 *.o
 *.a
 mtls-hello
+mtls-hello-unittest
+mtls-hello-test-application
+source/version_.d
+
+# test failure data capture
+ffdc/
 
 # universal
 .DS_Store
 Thumbs.db
 *.log
 
-# guix cc shim created by justfile
-.guix-bin/
+# Apache module build artifacts (forked mod_ssl)
+vendor/mod_ssl/.deps/
+vendor/mod_ssl/.libs/
+vendor/mod_ssl/*.o
+vendor/mod_ssl/*.lo
+vendor/mod_ssl/*.la
+vendor/mod_ssl/*.so
+vendor/mod_ssl/*.slo
+vendor/mod_ssl/modules.mk
+
+
+
+# Robot Framework test output
+robot/output/
+robot-output/
+__pycache__/
+
+
+

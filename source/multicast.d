@@ -3,17 +3,36 @@
 /// for announcements from peers on the same LAN.
 module multicast;
 
+private __gshared bool g_shutdown;
+
+/// Request the multicast discovery thread to stop.
+void requestShutdown() @trusted nothrow @nogc
+{
+	g_shutdown = true;
+}
+
+/// Query whether shutdown has been requested.
+bool isShutdown() @trusted nothrow @nogc
+{
+	return g_shutdown;
+}
+
 import core.sys.posix.netinet.in_;
 import core.sys.posix.sys.socket;
 import core.thread;
 import std.datetime : Duration, MonoTime, msecs, seconds;
-import std.file : exists;
+import std.file : exists, dirEntries, SpanMode;
 import std.format : format;
 import std.json : JSONValue, parseJSON;
+import std.path : buildPath;
 import std.process : Config, environment, spawnProcess;
+import core.sync.condition : Condition;
+import core.sync.mutex;
+import std.algorithm : startsWith;
 import std.socket;
 import std.stdio;
 import std.string : strip;
+import trust : detectPeerCertificate;
 
 
 private enum string SERVICE_NAME = "mtls-hello";
@@ -28,6 +47,8 @@ struct MulticastConfig
 	string hostName = "localhost";
 	/// Directory containing trusted peer certificates (<hostname>.crt).
 	string trustDir = "";
+	/// Directory where discovered peer certificates are captured for review.
+	string purgatoryDir = "";
 	/// Path to the discovery callback script (empty if not configured).
 	string callbackScript = "";
 }
@@ -91,7 +112,7 @@ private void multicastWorker(ushort httpPort, MulticastConfig cfg)
 		ubyte[1024] buf;
 		Address senderAddr = new InternetAddress(0, 0);
 
-		while (true)
+		while (!isShutdown())
 		{
 			auto now = MonoTime.currTime;
 			if (now - lastAnnounce >= cfg.interval)
@@ -130,6 +151,27 @@ private string announceMessage(ushort httpPort, MulticastConfig cfg)
 	return j.toString() ~ "\n";
 }
 
+private bool isPeerAlreadyKnown(string hostName, string trustDir, string purgatoryDir)
+{
+	if (trustDir.length > 0)
+	{
+		auto trustPath = buildPath(trustDir, hostName ~ ".crt");
+		if (exists(trustPath))
+			return true;
+	}
+	if (purgatoryDir.length > 0)
+	{
+		foreach (entry; dirEntries(purgatoryDir, SpanMode.shallow))
+		{
+			import std.path : baseName;
+			auto name = baseName(entry.name);
+			if (name.startsWith(hostName ~ "."))
+				return true;
+		}
+	}
+	return false;
+}
+
 private void processAnnouncement(string text, Address sender, ushort ownPort,
 	MulticastConfig cfg, string ourCert, string ourKey, string reposRoot)
 {
@@ -156,36 +198,28 @@ private void processAnnouncement(string text, Address sender, ushort ownPort,
 			addr.toAddrString(), addr.port, peerPort);
 
 		auto peerHost = ("host" in j) ? j["host"].str : "unknown";
-		auto peerCertFile = cfg.trustDir.length == 0
-			? peerHost ~ ".crt"
-			: format("%s/%s.crt", cfg.trustDir, peerHost);
 		auto peerNetloc = format("%s:%d", addr.toAddrString(), peerPort);
 
-		auto env = environment.toAA;
-		env["HOST_NAME"] = cfg.hostName;
-		env["PEER_NETLOC"] = peerNetloc;
-		env["PEER_CERT_FILE"] = peerCertFile;
-		env["OUR_CERT"] = ourCert;
-		env["OUR_KEY"] = ourKey;
-		env["REPOS_ROOT"] = reposRoot;
+		if (isPeerAlreadyKnown(peerHost, cfg.trustDir, cfg.purgatoryDir))
+		{
+			stderr.writefln("[discovery] peer %s already known; skipping capture", peerHost);
+			return;
+		}
 
+		// Enqueue a capture request for the main event loop worker. The worker
+		// runs the actual mTLS handshake and captures the peer certificate,
+		// then spawns the callback with the real purgatory path.
 		try
 		{
-			if (!exists(cfg.callbackScript))
-			{
-				stderr.writefln("multicast warning: failed to spawn callback %s: file not found",
-					cfg.callbackScript);
-			}
-			else
-			{
-				spawnProcess(["bash", cfg.callbackScript],
-					stdin, stdout, stderr, env, Config.none);
-			}
+			pushCaptureRequest(CaptureRequest(
+				addr.toAddrString(), peerPort, ourCert, ourKey,
+				cfg.purgatoryDir, cfg.callbackScript, cfg.hostName,
+				peerNetloc, reposRoot));
 		}
 		catch (Exception e)
 		{
-			stderr.writefln("multicast warning: failed to spawn callback %s: %s",
-				cfg.callbackScript, e.msg);
+			stderr.writefln("multicast warning: failed to enqueue peer cert capture for %s: %s",
+				peerNetloc, e.msg);
 		}
 	}
 	catch (Exception e)
@@ -194,8 +228,139 @@ private void processAnnouncement(string text, Address sender, ushort ownPort,
 	}
 }
 
+unittest
+{
+	import std.file : mkdirRecurse, remove, rmdirRecurse, write;
+	import std.path : buildPath;
+
+	auto tmp = "/tmp/mtls-test-known-peer";
+	scope (exit) rmdirRecurse(tmp);
+
+	mkdirRecurse(buildPath(tmp, "hosts"));
+	mkdirRecurse(buildPath(tmp, "purgatory"));
+
+	// Not known when dirs are empty.
+	assert(!isPeerAlreadyKnown("alpha", buildPath(tmp, "hosts"), buildPath(tmp, "purgatory")));
+
+	// Known when a trust file exists.
+	write(buildPath(tmp, "hosts", "alpha.crt"), "test");
+	assert(isPeerAlreadyKnown("alpha", buildPath(tmp, "hosts"), buildPath(tmp, "purgatory")));
+
+	// Known when a purgatory file exists.
+	remove(buildPath(tmp, "hosts", "alpha.crt"));
+	write(buildPath(tmp, "purgatory", "alpha.deadbeef.crt"), "test");
+	assert(isPeerAlreadyKnown("alpha", buildPath(tmp, "hosts"), buildPath(tmp, "purgatory")));
+
+	// Different hostname is not known.
+	assert(!isPeerAlreadyKnown("beta", buildPath(tmp, "hosts"), buildPath(tmp, "purgatory")));
+}
+
 // Linux multicast API not fully exposed by the D core/sys bindings on this compiler.
 private enum IP_MULTICAST_IF = 32;
 private enum IP_MULTICAST_TTL = 33;
 private enum IP_MULTICAST_LOOP = 34;
 private enum IP_ADD_MEMBERSHIP = 35;
+
+private struct CaptureRequest
+{
+	string peerHost;
+	ushort peerPort;
+	string ourCert;
+	string ourKey;
+	string purgatoryDir;
+	string callbackScript;
+	string hostName;
+	string peerNetloc;
+	string reposRoot;
+}
+
+private __gshared CaptureRequest[] s_captureQueue;
+private __gshared Mutex s_captureMutex;
+private __gshared Condition s_captureCondition;
+
+private void ensureCaptureMutex()
+{
+	if (s_captureMutex is null)
+		s_captureMutex = new Mutex();
+}
+
+private void ensureCaptureCondition()
+{
+	ensureCaptureMutex();
+	if (s_captureCondition is null)
+		s_captureCondition = new Condition(s_captureMutex);
+}
+
+private void pushCaptureRequest(CaptureRequest req) @trusted
+{
+	ensureCaptureCondition();
+	bool wasEmpty;
+	synchronized (s_captureMutex)
+	{
+		wasEmpty = s_captureQueue.length == 0;
+		s_captureQueue ~= req;
+	}
+	if (wasEmpty)
+		s_captureCondition.notify();
+}
+
+/// Process queued capture requests in the main event loop. This is called
+/// periodically from a vibe.d task started in app.d.
+void processCaptureQueue() @trusted nothrow
+{
+	try
+	{
+		ensureCaptureCondition();
+		CaptureRequest request;
+		synchronized (s_captureMutex)
+		{
+			if (s_captureQueue.length == 0)
+				s_captureCondition.wait(1.seconds);
+			if (s_captureQueue.length > 0)
+			{
+				request = s_captureQueue[0];
+				s_captureQueue = s_captureQueue[1 .. $];
+			}
+		}
+
+		if (request.peerHost.length == 0)
+			return;
+
+		try
+		{
+			auto capture = detectPeerCertificate(request.peerHost, request.peerPort,
+				request.ourCert, request.ourKey, request.purgatoryDir);
+
+			auto env = environment.toAA;
+			env["HOST_NAME"] = request.hostName;
+			env["PEER_NETLOC"] = request.peerNetloc;
+			env["PEER_CERT_FILE"] = capture.purgatoryPath;
+			env["OUR_CERT"] = request.ourCert;
+			env["OUR_KEY"] = request.ourKey;
+			env["REPOS_ROOT"] = request.reposRoot;
+
+			if (capture.purgatoryPath.length == 0)
+				stderr.writefln("discovery warning: failed to capture peer certificate for %s",
+					request.peerNetloc);
+			else
+				stderr.writefln("discovery: captured peer certificate for %s at %s",
+					capture.hostname, capture.purgatoryPath);
+
+			if (!exists(request.callbackScript))
+				stderr.writefln("multicast warning: failed to spawn callback %s: file not found",
+					request.callbackScript);
+			else
+				spawnProcess(["bash", request.callbackScript],
+					stdin, stdout, stderr, env, Config.none);
+		}
+		catch (Exception e)
+		{
+			stderr.writefln("multicast warning: peer cert capture or callback failed for %s: %s",
+				request.peerNetloc, e.msg);
+		}
+	}
+	catch (Exception)
+	{
+		// Nothing we can do here.
+	}
+}

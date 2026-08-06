@@ -15,7 +15,7 @@ build_binary
 version="$(project_version)"
 description="$(project_description)"
 pkgroot="$(mktemp -d)"
-trap 'rm -rf "$pkgroot"' EXIT
+trap 'cleanup_pkgroot "$pkgroot"' EXIT
 
 stage_install_tree "$pkgroot"
 
@@ -57,7 +57,7 @@ mkdir -p "$outdir"
 abs_outdir="$(cd "$outdir" 2>/dev/null && pwd)"
 [ -z "$abs_outdir" ] && abs_outdir="$outdir"
 pkg="$abs_outdir/mtls-hello-${version}-1-x86_64.pkg.tar.zst"
-rm -f "$pkg"
+remove_file_safe "$pkg"
 # .PKGINFO and .INSTALL must be first in the archive.
 cd "$pkgroot"
 tar --owner=0 --group=0 -cf - .PKGINFO .INSTALL var usr | zstd -q -o "$pkg"

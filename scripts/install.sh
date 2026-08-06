@@ -7,51 +7,70 @@ if [ ! -f "$binary" ]; then
     exit 1
 fi
 
+# Safe-deletion helpers (no rm -rf / rm -f anywhere).
+# shellcheck source=scripts/cleanup-common.sh
+. "$(dirname "$0")/cleanup-common.sh"
+
 mkdir -p "$HOME/.local/bin"
 mkdir -p "$HOME/.local/share/mtls-hello"
 mkdir -p "$HOME/.local/share/mtls-hello/scripts"
 
 install -D -m 755 "$binary" "$HOME/.local/bin/mtls-hello"
 
-if [ -d "$HOME/.local/share/mtls-hello/handlers" ]; then
-    rm -rf "$HOME/.local/share/mtls-hello/handlers"
+HANDLERS_DST="$HOME/.local/share/mtls-hello/handlers"
+if [ -d "$HANDLERS_DST" ]; then
+    # Remove the handler scripts we ship, then drop the dir if it is now empty.
+    for h in hello.get.sh head.get.sh spool.get.sh bundle.post.sh cert-echo.get.sh; do
+        remove_file_safe "$HANDLERS_DST/$h"
+    done
+    rmdir -- "$HANDLERS_DST" || echo "warning: $HANDLERS_DST not empty after removing known handlers" >&2
 fi
-
-cp -r handlers "$HOME/.local/share/mtls-hello/handlers"
+mkdir -p "$HANDLERS_DST"
+cp -p handlers/hello.get.sh handlers/head.get.sh handlers/spool.get.sh \
+    handlers/bundle.post.sh handlers/cert-echo.get.sh "$HANDLERS_DST/"
 cp -p scripts/on-discover.sh "$HOME/.local/share/mtls-hello/scripts/on-discover.sh"
 cp -p scripts/sync-common.sh "$HOME/.local/share/mtls-hello/scripts/sync-common.sh"
 cp -p scripts/trust-host.sh "$HOME/.local/share/mtls-hello/scripts/trust-host.sh"
+cp -p scripts/merge-spool.sh "$HOME/.local/share/mtls-hello/scripts/merge-spool.sh"
+cp -p scripts/cgi-trust.sh "$HOME/.local/share/mtls-hello/scripts/cgi-trust.sh"
+cp -p scripts/log-capture.sh "$HOME/.local/share/mtls-hello/scripts/log-capture.sh"
+cp -p scripts/cgi-common.sh "$HOME/.local/share/mtls-hello/scripts/cgi-common.sh"
+cp -p scripts/apache-config.sh "$HOME/.local/share/mtls-hello/scripts/apache-config.sh"
+cp -p scripts/migrate-layout.sh "$HOME/.local/share/mtls-hello/scripts/migrate-layout.sh"
 # .new files are always overwritten with latest defaults.
 # User-created files (without .new) are never touched.
 cp -p scripts/pre-push.sh.new "$HOME/.local/share/mtls-hello/scripts/pre-push.sh.new"
-# Generate self-signed server certificate on first install if missing.
-mkdir -p "$HOME/.local/share/mtls-hello/certs/certs" "$HOME/.local/share/mtls-hello/certs/private"
-if [ ! -f "$HOME/.local/share/mtls-hello/certs/certs/server.crt" ]; then
+# Generate a self-signed identity certificate on first install if missing.
+HOST="$(hostname)"
+# Sanitize the hostname for the filename (keep [A-Za-z0-9._-], else '_').
+HOST_FN="$(printf '%s' "$HOST" | tr -c 'A-Za-z0-9._-' '_')"
+mkdir -p "$HOME/.local/share/mtls-hello/identity"
+if [ ! -f "$HOME/.local/share/mtls-hello/identity/$HOST_FN.crt" ]; then
     if ! openssl version >/dev/null 2>&1; then
-        echo "Warning: openssl not found; cannot generate self-signed server certificate." >&2
+        echo "Warning: openssl not found; cannot generate self-signed identity certificate." >&2
         echo "Install openssl or provide certificates manually." >&2
     else
         openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-            -keyout "$HOME/.local/share/mtls-hello/certs/private/server.key" \
-            -out "$HOME/.local/share/mtls-hello/certs/certs/server.crt" \
-            -subj "/CN=$(hostname)" >/dev/null 2>&1
-        chmod 600 "$HOME/.local/share/mtls-hello/certs/private/server.key"
-        echo "Generated self-signed server certificate for $(hostname)"
+            -keyout "$HOME/.local/share/mtls-hello/identity/$HOST_FN.key" \
+            -out "$HOME/.local/share/mtls-hello/identity/$HOST_FN.crt" \
+            -subj "/CN=$HOST" >/dev/null 2>&1
+        chmod 600 "$HOME/.local/share/mtls-hello/identity/$HOST_FN.key"
+        echo "Generated self-signed identity certificate for $HOST"
     fi
 fi
 
-# Vendor Guix-provided shared libraries so the binary runs without guix shell.
-# GUIX_ENVIRONMENT may be unset when running outside the guix shell.
+# Migrate a legacy nested certs/ layout to the flat layout (no-op on fresh installs).
+bash "$HOME/.local/share/mtls-hello/scripts/migrate-layout.sh" "$HOME/.local/share/mtls-hello" "$HOST" || true
+
+# Vendor runtime libraries so the binary runs without the Nix shell. The D
+# binary links against OpenSSL and zlib from the Nix store; copy those into the
+# install tree and let the systemd service use LD_LIBRARY_PATH to find them.
 mkdir -p "$HOME/.local/lib/mtls-hello"
-for lib in libssl.so.3 libcrypto.so.3 libz.so.1 libphobos2-ldc-shared.so.97 libdruntime-ldc-shared.so.97; do
-  if [ -n "${GUIX_ENVIRONMENT:-}" ]; then
-    src=$(find "$GUIX_ENVIRONMENT" /gnu/store -name "$lib" -not -path "*.drv*" -type f,l 2>/dev/null | head -1)
-  else
-    src=$(find /gnu/store -name "$lib" -not -path "*.drv*" -type f,l 2>/dev/null | head -1)
-  fi
-  if [ -n "$src" ]; then
-    rm -f "$HOME/.local/lib/mtls-hello/$lib"
-    cp "$src" "$HOME/.local/lib/mtls-hello/$lib"
+for lib in libssl.so.3 libcrypto.so.3 libz.so.1; do
+  src=$(ldd "$binary" | awk -v libname="$lib" '$1 == libname { print $3 }')
+  if [ -n "$src" ] && [ -f "$src" ]; then
+    remove_file_safe "$HOME/.local/lib/mtls-hello/$lib"
+    cp -L "$src" "$HOME/.local/lib/mtls-hello/$lib"
   fi
 done
 
@@ -59,15 +78,27 @@ echo "Installed mtls-hello to $HOME/.local/bin/mtls-hello"
 echo "Installed handlers to $HOME/.local/share/mtls-hello/handlers/"
 echo "Installed discovery callback to $HOME/.local/share/mtls-hello/scripts/on-discover.sh"
 echo "Installed hook templates (*.new) to $HOME/.local/share/mtls-hello/scripts/"
-echo "Installed certificates to $HOME/.local/share/mtls-hello/certs/"
+echo "Installed certificates to $HOME/.local/share/mtls-hello/identity/"
 echo "Vendored runtime libs to $HOME/.local/lib/mtls-hello/"
+echo
+echo "Generating Apache site configuration..."
+DATA_DIR="$HOME/.local/share/mtls-hello"
+HOST_FN="$(printf '%s' "$(hostname)" | tr -c 'A-Za-z0-9._-' '_')"
+bash "$DATA_DIR/scripts/apache-config.sh" "$DATA_DIR" "${MTLS_PORT:-8443}" \
+    "$DATA_DIR/identity/$HOST_FN.crt" "$DATA_DIR/identity/$HOST_FN.key" \
+    "$DATA_DIR/apache/httpd.conf"
+echo "Installed Apache config to $DATA_DIR/apache/httpd.conf"
 echo
 echo "To activate a hook: cp <name>.new <name> && chmod +x <name>"
 echo "Re-running install overwrites .new files but preserves your custom files."
 echo
 echo "If ~/.local/bin is not on your PATH, add:"
+# shellcheck disable=SC2016
+# The advice is meant to be copied literally; $HOME should not expand here.
 echo '  export PATH="$HOME/.local/bin:$PATH"'
 echo
 echo "To enable discovery-triggered sync, set:"
+# shellcheck disable=SC2016
+# The advice is meant to be copied literally; $HOME should not expand here.
 echo '  export CALLBACK_SCRIPT="$HOME/.local/share/mtls-hello/scripts/on-discover.sh"'
 echo "(Required — the server has no default path for CALLBACK_SCRIPT.)"

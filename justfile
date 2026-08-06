@@ -1,47 +1,64 @@
-# mtls-hello — mutual-TLS D HTTP server (vibe.d)
+# mtls-hello — mTLS discovery daemon and Apache-backed HTTPS server
 #
-# Everything runs inside `guix shell -f guix.scm` so the build links against a
-# real OpenSSL 3.x instead of the host's LibreSSL. LDC is used because Guix's
-# `dmd` is GNU Shepherd, not the D compiler.
+# The D binary performs LAN multicast discovery and peer certificate capture.
+# Apache httpd serves the HTTPS endpoints via CGI handlers.
+# Everything runs inside a plain Nix shell (nix-shell, no flakes) so the build
+# links against a real OpenSSL 3.x instead of the host's LibreSSL.
 
 set shell := ["bash", "-c"]
-set positional-arguments := false
+set positional-arguments := true
 
-# LDC in the Guix shell needs a `cc` driver and bfd linker because:
-#   - gcc-toolchain has no `cc` symlink
-#   - LDC defaults to `-fuse-ld=gold` but Guix binutils has no `ld.gold`
-#   - the openssl bindings pre-generate step needs $DC set
-#   - dub 1.23 in Guix needs --skip-registry=standard to avoid registry TLS failures
-_build_vars := "mkdir -p .guix-bin && ln -sf \"$(command -v gcc)\" .guix-bin/cc && PATH=\"$PWD/.guix-bin:$PATH\" DFLAGS=\"--linker=bfd\" DC=\"ldc2 --linker=bfd\" SKIP_REGISTRY=\"--skip-registry=standard\""
-_run_env := "LD_LIBRARY_PATH=\"$GUIX_ENVIRONMENT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\""
+# Dub is told to use the local package cache once it is populated. Do not keep
+# rebuilding the D dependencies; the Nix shell provides the toolchain only.
+DUB_FLAGS := "--compiler=ldc2 --skip-registry=standard"
 
-# enter the guix dev shell
+# enter the nix dev shell
 default:
-    guix shell -f guix.scm
+    nix-shell
 
 # build the server binary
 build:
-    guix shell -f guix.scm -- sh -c 'bash scripts/version.sh && {{ _build_vars }} dub build --compiler=ldc2 $SKIP_REGISTRY'
+    nix-shell --run 'python3 scripts/version.py && dub build {{ DUB_FLAGS }}'
 
-# run the server: just run -- [port] [cert] [key]
+# run the discovery daemon: just run -- [advertised-port] [options]
 run *args:
-    guix shell -f guix.scm -- sh -c '{{ _build_vars }} {{ _run_env }} exec dub run --compiler=ldc2 $SKIP_REGISTRY -- {{ args }}'
+    nix-shell --run 'exec dub run {{ DUB_FLAGS }} -- {{args}}'
+
+# run the D unit tests
+# filter: just test-d -- --filter "capture"
+test-d *args:
+    nix-shell --run 'dub build --config=unittest --build=unittest {{ DUB_FLAGS }} {{ args }}'
+    nix-shell --run 'exec ./mtls-hello-unittest'
 
 # run the BATS end-to-end tests (spins up its own server)
-test:
-    guix shell -f guix.scm -- sh -c '{{ _build_vars }} {{ _run_env }} exec bats tests/'
+# filter: just test --filter "bare-repo sync"
+test *args:
+    nix-shell --run 'LD_LIBRARY_PATH="" bats tests/ {{args}}'
+
+# run the Robot Framework end-to-end tests (new, will replace BATS over time)
+# filter: just robot -- -i smoke
+robot *args:
+    nix-shell --run 'robot -d robot-output robot/mtls_hello.robot {{args}}'
+
+# run tests in Docker (matches CI environment, no Nix needed)
+# filter: just test-docker --filter "bare-repo sync"
+test-docker *args:
+    docker build -t mtls-hello-build-debian -f docker/Dockerfile.debian . \
+        && docker build -t mtls-hello-test -f docker/Dockerfile.test . \
+        && docker run --rm -v "$PWD:/src:ro" -v mtls-dub-test:/root/.dub \
+           mtls-hello-test bash -c 'cp -a /src /build && cd /build && rm -rf .dub && DC=ldc2 dub build --compiler=ldc2 && bats tests/ "$@"' _ "$@"
 
 # install the binary and default handlers to ~/.local
 install:
-    guix shell -f guix.scm -- bash scripts/install.sh
+    nix-shell --run 'LD_LIBRARY_PATH="" bash scripts/install.sh'
 
 # generate a systemd user service unit for the current user
 install-service:
-    guix shell -f guix.scm -- bash scripts/install-service.sh
+    nix-shell --run 'LD_LIBRARY_PATH="" bash scripts/install-service.sh'
 
-# build a self-extracting installer script for non-Guix targets
+# build a self-extracting installer script for non-Nix targets
 self-extract:
-    guix shell -f guix.scm -- sh -c 'bash scripts/version.sh && {{ _build_vars }} dub build --compiler=ldc2 $SKIP_REGISTRY && bash scripts/self-extract-build.sh'
+    nix-shell --run 'sh scripts/version.sh && dub build {{ DUB_FLAGS }} && bash scripts/self-extract-build.sh'
 
 # build a Debian .deb package (run on Debian/Ubuntu with ldc, dub, libssl-dev)
 package-debian:
@@ -61,4 +78,4 @@ package-docker:
 
 # clean build artifacts
 clean:
-    guix shell -f guix.scm -- sh -c '{{ _build_vars }} dub clean'
+    nix-shell --run 'dub clean'

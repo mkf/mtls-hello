@@ -15,7 +15,12 @@ set -euo pipefail
 # Guix-built vendored one (which may have older OPENSSL symbol versions).
 unset LD_LIBRARY_PATH
 
-: "${HOST_NAME:?}" "${PEER_NETLOC:?}" "${PEER_CERT_FILE:?}" "${OUR_CERT:?}" "${OUR_KEY:?}" "${REPOS_ROOT:?}"
+: "${HOST_NAME:?}" "${PEER_NETLOC:?}" "${OUR_CERT:?}" "${OUR_KEY:?}" "${REPOS_ROOT:?}"
+
+if [ -z "${PEER_CERT_FILE:-}" ] || [ ! -f "$PEER_CERT_FILE" ]; then
+    echo "[discovery] PEER_CERT_FILE is not set or missing; cannot connect to peer" >&2
+    exit 0
+fi
 
 # FFDC (First Failure Data Capture): on first push failure for a given
 # repo+host pair, capture full details to a log file. Subsequent failures
@@ -23,7 +28,19 @@ unset LD_LIBRARY_PATH
 FFDC_DIR="$(dirname "$0")/../ffdc"
 
 # Source shared curl/cert functions.
+# shellcheck source=scripts/sync-common.sh
 . "$(dirname "$0")/sync-common.sh"
+
+# Source shared safe-deletion helpers (no rm -rf / rm -f anywhere).
+# shellcheck source=scripts/cleanup-common.sh
+. "$(dirname "$0")/cleanup-common.sh"
+
+# Source shared sync-state helpers.
+# shellcheck source=scripts/sync-state.sh
+. "$(dirname "$0")/sync-state.sh"
+
+# Resolve the peer hostname before the repo loop so we can use it for sync-state keys.
+ensure_peer_host 2>/dev/null || true
 
 
 synced=0
@@ -45,6 +62,14 @@ for repo_dir in "$REPOS_ROOT"/*/; do
         continue
     fi
 
+    # Check if we already sent this peer the current refs for this repo.
+    current_hash=$(compute_refs_hash "$repo_dir")
+    cached_hash=$(get_synced_hash "$PEER_HOST" "$name")
+    if [ -n "$current_hash" ] && [ "$current_hash" = "$cached_hash" ]; then
+        echo "[$name] refs hash unchanged for $PEER_HOST; skipping"
+        continue
+    fi
+
     # Check if peer already has our HEAD to avoid unnecessary bundling.
     our_head=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || echo "")
     peer_refs=$(mtls_curl "/head?repo=${name}" 2>/dev/null || true)
@@ -53,23 +78,45 @@ for repo_dir in "$REPOS_ROOT"/*/; do
         continue
     fi
 
-    bundle="$(mktemp)"
-    echo "[$name] bundling refs/heads + refs/tags"
-    if ! git -C "$repo_dir" bundle create "$bundle" --branches --tags >/dev/null 2>&1; then
-        echo "[$name] bundle creation failed; skipping"
-        skipped=$((skipped + 1))
-        rm -f "$bundle"
-        continue
-    fi
+    # Query spool coverage to skip already-spooled ranges.
+    spool_cov=$(query_spool_coverage "$name")
 
-    echo "[$name] pushing bundle to $PEER_NETLOC"
-    push_out=$(mtls_curl_post "/bundle?repo=${name}&host=${HOST_NAME}" "$bundle" 2>&1)
-    if echo "$push_out" | grep -q "HTTP 200"; then
-        synced=$((synced + 1))
-        echo "[$name] pushed"
-        # Success clears any persisted FFDC log for this repo+host pair.
-        rm -f "$FFDC_DIR/${name}-${HOST_NAME}"
-    else
+    # Push each branch as a separate bundle to stay under server size limits.
+    # Large combined bundles (--branches --tags) can exceed maxRequestSize.
+    branches=()
+    while IFS= read -r ref; do branches+=("$ref"); done < <(git -C "$repo_dir" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null || true)
+
+    repo_failed=0
+
+    for branch in "${branches[@]}"; do
+        to_sha=$(git -C "$repo_dir" rev-parse "$branch" 2>/dev/null || echo "")
+        # Skip if this range is already spooled at the peer.
+        if [ -n "$to_sha" ] && echo "$spool_cov" | grep -q "0000000000000000000000000000000000000000 $to_sha"; then
+            echo "[$name] $branch already spooled at peer; skipping"
+            continue
+        fi
+
+        bbundle="$(mktemp)"
+        echo "[$name] bundling $branch"
+        bbundle_output=$(git -C "$repo_dir" bundle create "$bbundle" "$branch" --tags 2>&1) || true
+        if [ ! -s "$bbundle" ]; then
+            echo "[$name] bundle creation failed for $branch: $bbundle_output"
+            remove_file_safe "$bbundle"
+            continue
+        fi
+        bsize=$(wc -c < "$bbundle")
+        echo "[$name] bundle ($branch): $bsize bytes"
+
+        echo "[$name] pushing $branch to $PEER_NETLOC"
+        push_out=$(mtls_curl_post "/bundle?repo=${name}&host=${HOST_NAME}&from=0000000000000000000000000000000000000000&to=${to_sha}" "$bbundle" 2>&1) || true
+        remove_file_safe "$bbundle"
+        if echo "$push_out" | grep -q "HTTP 200"; then
+            synced=$((synced + 1))
+            # Success clears FFDC for this repo+host pair.
+            remove_file_safe "$FFDC_DIR/${name}-${HOST_NAME}"
+            continue
+        fi
+        repo_failed=1
         ffdc="$FFDC_DIR/${name}-${HOST_NAME}"
         if [ -f "$ffdc" ]; then
             echo "[$name] push to $HOST_NAME still failing — see $ffdc"
@@ -89,9 +136,10 @@ for repo_dir in "$REPOS_ROOT"/*/; do
             echo "[$name] The peer's certificate is not trusted yet."
             purg="${PEER_CERT_FILE%/*}/../purgatory"
             purg="$(cd "$purg" 2>/dev/null && pwd)" || purg=""
-            if [ -n "$purg" ] && [ -n "$(ls -A "$purg" 2>/dev/null)" ]; then
+            if [ -n "$purg" ] && [ -n "$(find "$purg" -maxdepth 1 -type f -name '*.crt' -print -quit 2>/dev/null)" ]; then
                 echo "[$name] Found captured certs in $purg:"
-                ls "$purg"/*.crt 2>/dev/null | while read f; do
+                for f in "$purg"/*.crt; do
+                    [ -e "$f" ] || continue
                     cn=$(openssl x509 -in "$f" -noout -subject 2>/dev/null | sed -n 's/.*CN\s*=\s*//p')
                     printf '[%s]   bash %s/scripts/trust-host.sh %s %s\n' "$name" "${PEER_CERT_FILE%/*}" "$cn" "$f"
                 done
@@ -102,9 +150,10 @@ for repo_dir in "$REPOS_ROOT"/*/; do
             printf '[%s] Trust the peer with:\n' "$name"
             printf '[%s]   bash %s/scripts/trust-host.sh %s <cert-file>\n' "$name" "${PEER_CERT_FILE%/*}" "$HOST_NAME"
         fi
-        skipped=$((skipped + 1))
-    fi
-    rm -f "$bundle"
-done
+    done
 
+    if [ "$repo_failed" -eq 0 ] && [ -n "$current_hash" ]; then
+        set_synced_hash "$PEER_HOST" "$name" "$current_hash"
+    fi
+done
 echo "synced=$synced skipped=$skipped"

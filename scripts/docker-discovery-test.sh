@@ -7,7 +7,7 @@ PASS=0; FAIL=0
 pass() { echo "  ✓ $1"; PASS=$((PASS + 1)); }
 fail() { echo "  ✗ $1"; FAIL=$((FAIL + 1)); }
 
-cleanup() { docker rm -f disco-test 2>/dev/null || true; }
+cleanup() { docker stop disco-test >/dev/null 2>&1 || true; docker rm disco-test 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo "=== Starting container ==="
@@ -47,7 +47,7 @@ if [ -s "$tmp" ]; then
 else
     echo "alpha extraction FAILED"
 fi
-rm -f "$tmp"
+rm -- "$tmp"
 
 # Beta extracts alpha
 tmp=$(mktemp)
@@ -61,7 +61,7 @@ if [ -s "$tmp" ]; then
 else
     echo "beta extraction FAILED"
 fi
-rm -f "$tmp"
+rm -- "$tmp"
 
 echo "--- mTLS connection ---"
 echo -n "alpha->beta: "

@@ -1,12 +1,19 @@
 # Docker build context — keep the image small by excluding build artifacts.
 .git
 .dub
-.guix-bin
 dist
 certs
 mtls-hello
 mtls-hello-installer-*.sh
+ffdc
 *.o
 *.a
+*.so
+*.lo
+*.la
+*.slo
 *.log
 .DS_Store
+vendor/mod_ssl/.deps
+vendor/mod_ssl/.libs
+vendor/mod_ssl/modules.mk

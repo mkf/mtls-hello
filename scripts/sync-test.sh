@@ -7,10 +7,21 @@ unset LD_LIBRARY_PATH
 
 cd "$(dirname "$0")/.."
 
+# Safe-deletion helpers (no rm -rf / rm -f anywhere).
+# shellcheck source=scripts/cleanup-common.sh
+. "$(dirname "$0")/cleanup-common.sh"
+
 repo="${1:?Usage: $0 <path-to-bare-repo.git>}"
 name=$(basename "$repo" .git)
 tmpdir=$(mktemp -d)
-trap "rm -rf $tmpdir" EXIT
+
+# Best-effort cleanup of the scratch dir we created.
+cleanup_tmpdir() {
+    remove_git_repo "$tmpdir/${name}.git"
+    remove_file_safe "$tmpdir/bundle" "$tmpdir/bundle.tmp"
+    rmdir -- "$tmpdir" || echo "warning: could not rmdir $tmpdir" >&2
+}
+trap 'cleanup_tmpdir' EXIT
 
 # Create receiver side (fresh bare repo)
 PEER_REPO="$tmpdir/${name}.git"
@@ -91,8 +102,8 @@ clone=$(mktemp -d)
 if git clone "$PEER_REPO" "$clone" 2>/dev/null; then
     echo "clone OK — HEAD at $(git -C "$clone" rev-parse HEAD)"
     ls "$clone" | head -5
-    rm -rf "$clone"
+    remove_git_repo "$clone"
 else
     echo "clone FAILED (this is the bug)"
-    rm -rf "$clone"
+    remove_git_repo "$clone"
 fi

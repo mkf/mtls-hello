@@ -11,6 +11,32 @@
 # No Guix. Builds natively with the host's ldc + dub.
 set -euo pipefail
 
+# Safe-deletion helpers (no rm -rf / rm -f anywhere).
+# shellcheck source=scripts/cleanup-common.sh
+_pkgcommon_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+. "$_pkgcommon_dir/cleanup-common.sh"
+
+# Best-effort removal of the staged install tree we created.
+# Only the known files and directories are removed; leftovers are reported.
+cleanup_pkgroot() {
+    local root="$1"
+    remove_file_safe "$root"/usr/bin/mtls-hello
+    remove_file_safe "$root"/usr/lib/systemd/user/mtls-hello.service
+    remove_file_safe "$root"/var/lib/mtls-hello/handlers/*
+    remove_file_safe "$root"/var/lib/mtls-hello/scripts/*
+    # Per-distro metadata created by package-debian.sh / package-arch.sh.
+    remove_file_safe "$root"/DEBIAN/control "$root"/DEBIAN/postinst
+    remove_file_safe "$root"/.PKGINFO "$root"/.INSTALL
+    local d
+    for d in "$root"/DEBIAN "$root"/var/lib/mtls-hello/handlers "$root"/var/lib/mtls-hello/scripts \
+             "$root"/var/lib/mtls-hello "$root"/usr/lib/systemd/user "$root"/usr/lib/systemd \
+             "$root"/usr/lib "$root"/usr/bin "$root"/usr "$root"/var/lib "$root"/var; do
+        [ -d "$d" ] || continue
+        rmdir -- "$d" || echo "warning: could not rmdir $d" >&2
+    done
+    rmdir -- "$root" || echo "warning: could not rmdir $root" >&2
+}
+
 # Read the project version from dub.json.
 project_version() {
     sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' dub.json | head -1
@@ -59,8 +85,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=OUR_CERT=%h/.local/share/mtls-hello/certs/certs/server.crt
-Environment=OUR_KEY=%h/.local/share/mtls-hello/certs/private/server.key
+Environment=OUR_CERT=%h/.local/share/mtls-hello/identity/%H.crt
+Environment=OUR_KEY=%h/.local/share/mtls-hello/identity/%H.key
 Environment=REPOS_ROOT=%h/.local/state/REPOS_ROOT
 ExecStartPre=/var/lib/mtls-hello/scripts/gen-cert.sh
 ExecStart=/usr/bin/mtls-hello 0 \
@@ -96,25 +122,26 @@ stage_install_tree() {
     cp -p scripts/on-discover.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/sync-common.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/trust-host.sh "$root/var/lib/mtls-hello/scripts/"
+    cp -p scripts/merge-spool.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/pre-push.sh.new "$root/var/lib/mtls-hello/scripts/"
 
     # Cert-generation helper called by the systemd unit's ExecStartPre.
-    # Generates a self-signed cert at ~/.local/share/mtls-hello/certs/ if missing.
+    # Generates a self-signed identity cert at ~/.local/share/mtls-hello/identity/ if missing.
     cat > "$root/var/lib/mtls-hello/scripts/gen-cert.sh" <<'GENCERT'
 #!/usr/bin/env bash
 set -e
-cert_dir="$HOME/.local/share/mtls-hello/certs/certs"
-key_dir="$HOME/.local/share/mtls-hello/certs/private"
-mkdir -p "$cert_dir" "$key_dir"
-if [ ! -f "$cert_dir/server.crt" ]; then
+identity_dir="$HOME/.local/share/mtls-hello/identity"
+mkdir -p "$identity_dir"
+hostname_val="$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo localhost)"
+hostname_fn="$(printf '%s' "$hostname_val" | tr -c 'A-Za-z0-9._-' '_')"
+if [ ! -f "$identity_dir/$hostname_fn.crt" ]; then
     if openssl version >/dev/null 2>&1; then
-        hostname_val="$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo localhost)"
         openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-            -keyout "$key_dir/server.key" \
-            -out "$cert_dir/server.crt" \
+            -keyout "$identity_dir/$hostname_fn.key" \
+            -out "$identity_dir/$hostname_fn.crt" \
             -subj "/CN=$hostname_val" >/dev/null 2>&1
-        chmod 600 "$key_dir/server.key"
-        echo "Generated self-signed server certificate for $hostname_val"
+        chmod 600 "$identity_dir/$hostname_fn.key"
+        echo "Generated self-signed identity certificate for $hostname_val"
     else
         echo "Warning: openssl not found; cannot generate certificate." >&2
     fi
@@ -125,24 +152,30 @@ GENCERT
     write_systemd_unit "$root/usr/lib/systemd/user/mtls-hello.service"
 }
 
-# Post-install: generate a self-signed server certificate if none exists.
+# Post-install: generate a self-signed identity certificate if none exists.
 # Called by the Debian postinst and Arch .INSTALL scripts.
-# Cert lives at /var/lib/mtls-hello/certs/{certs/server.crt, private/server.key}.
+# Cert lives at /var/lib/mtls-hello/identity/<hostname>.crt (key next to it).
 generate_cert() {
-    local cert_dir="/var/lib/mtls-hello/certs/certs"
-    local key_dir="/var/lib/mtls-hello/certs/private"
-    mkdir -p "$cert_dir" "$key_dir"
-    if [ ! -f "$cert_dir/server.crt" ]; then
+    local identity_dir="/var/lib/mtls-hello/identity"
+    local hostname_val hostname_fn
+    hostname_val="$(hostname 2>/dev/null || echo localhost)"
+    hostname_fn="$(printf '%s' "$hostname_val" | tr -c 'A-Za-z0-9._-' '_')"
+    mkdir -p "$identity_dir"
+    if [ ! -f "$identity_dir/$hostname_fn.crt" ]; then
         if ! openssl version >/dev/null 2>&1; then
-            echo "Warning: openssl not found; cannot generate self-signed server certificate." >&2
+            echo "Warning: openssl not found; cannot generate self-signed identity certificate." >&2
             echo "Install openssl or provide certificates manually." >&2
         else
             openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-                -keyout "$key_dir/server.key" \
-                -out "$cert_dir/server.crt" \
-                -subj "/CN=$(hostname)" >/dev/null 2>&1
-            chmod 600 "$key_dir/server.key"
-            echo "Generated self-signed server certificate for $(hostname)"
+                -keyout "$identity_dir/$hostname_fn.key" \
+                -out "$identity_dir/$hostname_fn.crt" \
+                -subj "/CN=$hostname_val" >/dev/null 2>&1
+            chmod 600 "$identity_dir/$hostname_fn.key"
+            echo "Generated self-signed identity certificate for $hostname_val"
         fi
+    fi
+    # Migrate a legacy /var/lib/mtls-hello/certs layout if present.
+    if [ -f "/var/lib/mtls-hello/scripts/migrate-layout.sh" ]; then
+        bash "/var/lib/mtls-hello/scripts/migrate-layout.sh" "/var/lib/mtls-hello" "$hostname_val" || true
     fi
 }

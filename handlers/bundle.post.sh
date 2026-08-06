@@ -1,65 +1,49 @@
 #!/bin/bash
-# Receive a git bundle containing all refs and apply it to a bare repository.
-#
-# Branch sync rules:
-#   1. All incoming branches are fetched into a per-peer namespace:
-#      refs/remotes/<QUERY_HOST>/<branch>
-#   2. If the local branch does not exist, it is created at the incoming commit.
-#   3. If the local branch exists and the incoming commit is a descendant of
-#      the local one (fast-forward), the local branch is updated.
-#   4. If the local branch exists and the histories have diverged, the local
-#      branch is left unchanged and the peer's version stays in the namespace.
-#
-# Tag sync rules:
-#   - Tags are fetched without force. Missing tags are created; existing tags
-#     with the same name but a different object are left untouched (the existing
-#     tag wins). A non-zero exit from a tag conflict is ignored so that the
-#     branch sync is not rolled back.
-#
-# Required env (set by the server):
-#   REPOS_ROOT       directory containing bare repositories (e.g. alpha.git)
-#   QUERY_REPO       repository identifier (without .git suffix, e.g. alpha)
-#   QUERY_HOST       sending host's identity (used for the remote namespace)
+# CGI handler: POST /bundle → receive a git bundle and spool it.
+# The bundle is saved to <data-dir>/spool/<repo>/<from>-<to>.bundle
+# instead of being applied immediately. The operator runs merge-spool.sh.
+# Requires a trusted client certificate.
 set -euo pipefail
 
-repo_dir="${REPOS_ROOT?}/${QUERY_REPO?}.git"
-# Create the bare repo if it doesn't exist on this side yet.
-[ -d "$repo_dir" ] || git init --bare "$repo_dir"
-peer_host="${QUERY_HOST?}"
+# shellcheck disable=SC1091
+source "${MTLS_DATA_DIR}/scripts/cgi-common.sh"
+# shellcheck disable=SC1091
+source "${MTLS_DATA_DIR}/scripts/cgi-trust.sh"
 
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
-
-cat > "$tmp"
-
-remote_ns="refs/remotes/${peer_host}"
-
-# 1. Fetch all incoming branches into the per-peer namespace.
-git -C "$repo_dir" fetch "$tmp" "+refs/heads/*:${remote_ns}/*"
-
-# 2. Promote incoming branches to local refs/heads when safe.
-while IFS= read -r ref; do
-    branch="${ref#${remote_ns}/}"
-    incoming="$(git -C "$repo_dir" rev-parse "$ref")"
-
-    if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/${branch}"; then
-        local="$(git -C "$repo_dir" rev-parse "refs/heads/${branch}")"
-        if git -C "$repo_dir" merge-base --is-ancestor "$local" "$incoming"; then
-            git -C "$repo_dir" update-ref "refs/heads/${branch}" "$incoming"
-        fi
-    else
-        git -C "$repo_dir" update-ref "refs/heads/${branch}" "$incoming"
-    fi
-done < <(git -C "$repo_dir" for-each-ref --format='%(refname)' "${remote_ns}/")
-
-# 3. Fetch tags without force; skip conflicts silently.
-git -C "$repo_dir" fetch "$tmp" "refs/tags/*:refs/tags/*" || true
-
-# 4. If HEAD points to a nonexistent ref (bare repo just created), set it
-# to the first local branch so `git clone` works.
-first_branch=$(git -C "$repo_dir" for-each-ref --format='%(refname)' refs/heads | head -1)
-if [ -n "$first_branch" ] && ! git -C "$repo_dir" rev-parse --verify HEAD >/dev/null 2>&1; then
-    git -C "$repo_dir" symbolic-ref HEAD "$first_branch"
+cert="${SSL_CLIENT_CERT:-}"
+if [ -z "$cert" ]; then
+    cgi_error "401 Unauthorized" "No client certificate presented"
 fi
 
-echo "ok"
+if ! is_trusted; then
+    cgi_error "401 Unauthorized" "Untrusted"
+fi
+
+cgi_parse_query
+
+repo="${QUERY_REPO:-}"
+if [ -z "$repo" ]; then
+    cgi_error "400 Bad Request" "Missing repo parameter"
+fi
+
+from="${QUERY_FROM:-0000000000000000000000000000000000000000}"
+to="${QUERY_TO:-}"
+
+spool_dir="${MTLS_DATA_DIR}/spool/${repo}"
+mkdir -p "$spool_dir"
+
+# Read the bundle from stdin.
+tmp_bundle="$(mktemp)"
+cat > "$tmp_bundle"
+
+# Extract the tip SHA from the bundle if not provided.
+if [ -z "$to" ]; then
+    to=$(git bundle list-heads "$tmp_bundle" 2>/dev/null | head -1 | awk '{print $1}')
+    [ -n "$to" ] || to="unknown"
+fi
+
+dest="$spool_dir/${from}-${to}.bundle"
+mv "$tmp_bundle" "$dest"
+
+cgi_header "text/plain"
+echo "spooled"

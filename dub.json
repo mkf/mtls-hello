@@ -7,10 +7,30 @@
 	],
 	"license": "MIT",
 	"targetType": "executable",
-	"preBuildCommands": [
-		"bash scripts/version.sh"
+	"preBuildCommands": [],
+	"buildTypes": {
+		"unittest": {
+			"buildOptions": ["unittests"],
+			"dflags": ["--linker=bfd"]
+		}
+	},
+	"configurations": [
+		{
+			"name": "application",
+			"targetType": "executable",
+			"excludedSourceFiles": ["source/test_main.d"]
+		},
+		{
+			"name": "unittest",
+			"targetName": "mtls-hello-unittest",
+			"targetType": "executable",
+			"excludedSourceFiles": ["source/app.d"],
+			"mainSourceFile": "source/test_main.d",
+			"preBuildCommands": []
+		}
 	],
 	"dependencies": {
-		"vibe-d:http": "~>0.10.0"
+		"vibe-core": "~>2.14",
+		"vibe-stream:tls": "~>1.4"
 	}
 }

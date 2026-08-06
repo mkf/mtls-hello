@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' dub.json | head -1)
 if [ -z "$version" ]; then
