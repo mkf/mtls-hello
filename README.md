@@ -4,10 +4,10 @@ Mutual-TLS HTTP server with LAN multicast discovery and Git repository synchroni
 
 ## Made with
 
-- **D** — the core daemon is written in D, compiled with `ldc` / `dub`
-- **vibe.d** — async HTTP framework and mTLS transport (via deimos OpenSSL bindings)
-- **OpenSSL 3.x** — TLS layer for both the server and Apache `mod_ssl`
-- **Apache httpd** — CGI reverse proxy, `mod_dav` drop-box, and `mod_ssl` termination
+- **Apache httpd** — the actual HTTPS server: CGI reverse proxy, `mod_dav` drop-box, and `mod_ssl` termination
+- **D** — LAN multicast discovery + outbound peer-certificate capture daemon, compiled with `ldc` / `dub`; does not serve HTTP itself (see `source/app.d`)
+- **vibe.d** — event loop, TCP/TLS streams, and logging used by the D daemon (via deimos OpenSSL bindings); not an HTTP framework here — Apache is
+- **OpenSSL 3.x** — X.509 / fingerprint handling and TLS: deimos bindings on the D side, Apache `mod_ssl` for serving
 - **Bash** — handler scripts, install tooling, sync logic, and hook templates
 - **Git** — bare-repository synchronization and bundle format
 - **systemd (user units)** — service lifecycle, socket activation, and logging
