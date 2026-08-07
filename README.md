@@ -2,6 +2,23 @@
 
 Mutual-TLS HTTP server with LAN multicast discovery and Git repository synchronization.
 
+## Made with
+
+- **D** — the core daemon is written in D, compiled with `ldc` / `dub`
+- **vibe.d** — async HTTP framework and mTLS transport (via deimos OpenSSL bindings)
+- **OpenSSL 3.x** — TLS layer for both the server and Apache `mod_ssl`
+- **Apache httpd** — CGI reverse proxy, `mod_dav` drop-box, and `mod_ssl` termination
+- **Bash** — handler scripts, install tooling, sync logic, and hook templates
+- **Git** — bare-repository synchronization and bundle format
+- **systemd (user units)** — service lifecycle, socket activation, and logging
+- **UDP multicast** — LAN peer discovery (`239.255.42.42:4242`)
+- **Nix** — reproducible dev shell with pinned OpenSSL (no flakes)
+- **just** — task runner; all recipes auto-enter `nix-shell`
+- **Robot Framework** — Apache/CGI end-to-end tests
+- **Docker** — cross-distro package builds (`.deb` + `.pkg.tar.zst`)
+- **NNCP** (optional) — async store-and-forward mesh; native `/nncp/receive/` endpoint
+
+
 ## Development Environment
 
 Development happens inside a plain Nix shell (no flakes). Add the nixpkgs
