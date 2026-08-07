@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-DATA_DIR="${DATA_DIR:-$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")/../../../..)}"
+DATA_DIR="${DATA_DIR:-$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 PEER="${HOST_NAME:-}"
 
 # Required env vars — empty or unset → abort.

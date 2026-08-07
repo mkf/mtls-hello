@@ -33,8 +33,8 @@ mkdir -p "$DATA_DIR/queues" "$DATA_DIR/discoveries.log.dir.tmp" 2>/dev/null || t
 # Pre-compute NNCP identity from $PEER_CERT_FILE — runs BEFORE the chain so
 # every sub-script sees these env vars. The `peer_extract` function lives
 # in scripts/cgi-trust.sh.
-. "$DATA_DIR/scripts/cgi-trust.sh" 2>/dev/null || {
-    echo "$LOG_PREFIX warning: scripts/cgi-trust.sh disappeared; running chain with empty NNCP-identity" >&2
+. "$DATA_DIR/scripts/cgi-lib.sh" 2>/dev/null || {
+    echo "$LOG_PREFIX warning: scripts/cgi-lib.sh disappeared; running chain with empty NNCP-identity" >&2
 }
 
 PEER_CERT_FILE="${PEER_CERT_FILE:-}"

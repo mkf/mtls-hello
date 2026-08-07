@@ -10,7 +10,7 @@
 # This script preserves feature 016/006 behaviour: on discovery, push
 # per-repo bundles over https://<peer>/bundle?repo=…&host=…&from=…&to=…, with
 # FFDC (First Failure Data Capture) per (repo, host) pair and idempotency
-# driven by `scripts/sync-state.sh` (compute_refs_hash / get_synced_hash).
+# driven by `sync-lib.sh` (compute_refs_hash / get_synced_hash).
 #
 # Per safety rule (G1): never `rm -rf` / `find -delete`. The legacy
 # on-discover.sh used `remove_file_safe` (feature 022) — we keep it.
@@ -37,9 +37,8 @@ fi
 FFDC_DIR="$DATA_DIR/ffdc"
 
 # Source shared helpers (all under scripts/, or under <data-dir>/scripts/ for installs).
-. "$DATA_DIR/scripts/sync-common.sh"  2>/dev/null || . "$PROJECT_ROOT/scripts/sync-common.sh"
+. "$DATA_DIR/scripts/sync-lib.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/sync-lib.sh"
 . "$DATA_DIR/scripts/cleanup-common.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cleanup-common.sh"
-. "$DATA_DIR/scripts/sync-state.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/sync-state.sh"
 
 # Resolve the peer hostname before the repo loop so we can use it for sync-state keys.
 ensure_peer_host 2>/dev/null || true

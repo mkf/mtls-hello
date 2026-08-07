@@ -22,7 +22,7 @@ DATA_DIR="${DATA_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 NNCP_HJSON="$DATA_DIR/nncp.hjson"
 
 # Get helpers.
-. "$DATA_DIR/scripts/cgi-common.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cgi-common.sh"
+. "$DATA_DIR/scripts/cgi-lib.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cgi-lib.sh"
 
 PEER="${HOST_NAME:-}"
 NNCP_ID="${PEER_NNCP_ID:-}"

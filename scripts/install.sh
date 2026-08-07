@@ -47,12 +47,11 @@ for f in scripts/on-discovery.d/*.sh; do
     cp -p "$f" "$HOME/.local/share/mtls-hello/scripts/on-discovery.d/"
     chmod 0755 "$HOME/.local/share/mtls-hello/scripts/on-discovery.d/$(basename -- "$f")" || true
 done
-cp -p scripts/sync-common.sh "$HOME/.local/share/mtls-hello/scripts/sync-common.sh"
+cp -p scripts/sync-lib.sh "$HOME/.local/share/mtls-hello/scripts/sync-lib.sh"
 cp -p scripts/trust-host.sh "$HOME/.local/share/mtls-hello/scripts/trust-host.sh"
 cp -p scripts/merge-spool.sh "$HOME/.local/share/mtls-hello/scripts/merge-spool.sh"
-cp -p scripts/cgi-trust.sh "$HOME/.local/share/mtls-hello/scripts/cgi-trust.sh"
+cp -p scripts/cgi-lib.sh "$HOME/.local/share/mtls-hello/scripts/cgi-lib.sh"
 cp -p scripts/log-capture.sh "$HOME/.local/share/mtls-hello/scripts/log-capture.sh"
-cp -p scripts/cgi-common.sh "$HOME/.local/share/mtls-hello/scripts/cgi-common.sh"
 cp -p scripts/apache-config.sh "$HOME/.local/share/mtls-hello/scripts/apache-config.sh"
 cp -p scripts/migrate-layout.sh "$HOME/.local/share/mtls-hello/scripts/migrate-layout.sh"
 # .new files are always overwritten with latest defaults.

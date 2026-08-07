@@ -70,3 +70,23 @@ jobs:
         with:
           name: arch-package
           path: dist/mtls-hello-*.pkg.tar.zst
+
+  package-arch-arm-rpi3:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build cross-compiled armv7h Arch package
+        run: |
+          docker build -f docker/Dockerfile.arch-rpi3 -t localhost/mtls-hello-arm-rpi3-build .
+          mkdir -p dist
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+            localhost/mtls-hello-arm-rpi3-build
+      - name: Verify armv7h PKGINFO + ELF
+        run: |
+          tar -I zstd -tf dist/mtls-hello-*-armv7h.pkg.tar.zst | head
+          tar -xOf dist/mtls-hello-*-armv7h.pkg.tar.zst .PKGINFO | grep '^arch'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armv7h-package
+          path: dist/mtls-hello-*-armv7h.pkg.tar.zst

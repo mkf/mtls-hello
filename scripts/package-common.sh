@@ -131,7 +131,7 @@ stage_install_tree() {
     # Feature 023: drop/ subdir is the mod_dav DocumentRoot.
     mkdir -p "$root/var/lib/mtls-hello/drop"
     cp -p scripts/on-discover.sh "$root/var/lib/mtls-hello/scripts/"
-    cp -p scripts/sync-common.sh "$root/var/lib/mtls-hello/scripts/"
+    cp -p scripts/sync-lib.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/trust-host.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/merge-spool.sh "$root/var/lib/mtls-hello/scripts/"
     cp -p scripts/pre-push.sh.new "$root/var/lib/mtls-hello/scripts/"

@@ -37,14 +37,14 @@ _commit_empty() {
 
 @test "compute_refs_hash returns empty for non-git directory" {
     mkdir -p "$TEST_DIR/not-git"
-    run bash -c 'source scripts/sync-state.sh; compute_refs_hash "$TEST_DIR/not-git"'
+    run bash -c 'source scripts/sync-lib.sh; compute_refs_hash "$TEST_DIR/not-git"'
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
 
 @test "compute_refs_hash returns 64-character hex for bare repo" {
     _commit_empty "$REPO_DIR" "init"
-    run bash -c 'source scripts/sync-state.sh; compute_refs_hash "$REPO_DIR"'
+    run bash -c 'source scripts/sync-lib.sh; compute_refs_hash "$REPO_DIR"'
     [ "$status" -eq 0 ]
     [ "${#output}" -eq 64 ]
     [[ "$output" =~ ^[0-9a-f]+$ ]]
@@ -52,24 +52,24 @@ _commit_empty() {
 
 @test "compute_refs_hash is stable for unchanged repo" {
     _commit_empty "$REPO_DIR" "init"
-    run bash -c 'source scripts/sync-state.sh; compute_refs_hash "$REPO_DIR"'
+    run bash -c 'source scripts/sync-lib.sh; compute_refs_hash "$REPO_DIR"'
     hash1="$output"
-    run bash -c 'source scripts/sync-state.sh; compute_refs_hash "$REPO_DIR"'
+    run bash -c 'source scripts/sync-lib.sh; compute_refs_hash "$REPO_DIR"'
     [ "$output" = "$hash1" ]
 }
 
 @test "compute_refs_hash changes after new commit" {
     _commit_empty "$REPO_DIR" "first"
-    run bash -c 'source scripts/sync-state.sh; compute_refs_hash "$REPO_DIR"'
+    run bash -c 'source scripts/sync-lib.sh; compute_refs_hash "$REPO_DIR"'
     hash1="$output"
     _commit_empty "$REPO_DIR" "second"
-    run bash -c 'source scripts/sync-state.sh; compute_refs_hash "$REPO_DIR"'
+    run bash -c 'source scripts/sync-lib.sh; compute_refs_hash "$REPO_DIR"'
     [ "$output" != "$hash1" ]
 }
 
 @test "set and get synced hash roundtrip" {
     local hash="a3b2c9d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
-    run bash -c 'source scripts/sync-state.sh; set_synced_hash "peer1" "repo" "'"$hash"'"; get_synced_hash "peer1" "repo"'
+    run bash -c 'source scripts/sync-lib.sh; set_synced_hash "peer1" "repo" "'"$hash"'"; get_synced_hash "peer1" "repo"'
     [ "$status" -eq 0 ]
     [ "$output" = "$hash" ]
 }
@@ -77,22 +77,22 @@ _commit_empty() {
 @test "different peers are isolated" {
     local hash1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     local hash2="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    run bash -c 'source scripts/sync-state.sh; set_synced_hash "peer1" "repo" "'"$hash1"'"; get_synced_hash "peer2" "repo"'
+    run bash -c 'source scripts/sync-lib.sh; set_synced_hash "peer1" "repo" "'"$hash1"'"; get_synced_hash "peer2" "repo"'
     [ -z "$output" ]
-    run bash -c 'source scripts/sync-state.sh; set_synced_hash "peer2" "repo" "'"$hash2"'"; get_synced_hash "peer2" "repo"'
+    run bash -c 'source scripts/sync-lib.sh; set_synced_hash "peer2" "repo" "'"$hash2"'"; get_synced_hash "peer2" "repo"'
     [ "$output" = "$hash2" ]
 }
 
 @test "set_synced_hash updates existing record" {
     local hash1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     local hash2="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    run bash -c 'source scripts/sync-state.sh; set_synced_hash "peer1" "repo" "'"$hash1"'"; set_synced_hash "peer1" "repo" "'"$hash2"'"; get_synced_hash "peer1" "repo"'
+    run bash -c 'source scripts/sync-lib.sh; set_synced_hash "peer1" "repo" "'"$hash1"'"; set_synced_hash "peer1" "repo" "'"$hash2"'"; get_synced_hash "peer1" "repo"'
     [ "$output" = "$hash2" ]
 }
 
 @test "clear_synced_hash removes record" {
     local hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    run bash -c 'source scripts/sync-state.sh; set_synced_hash "peer1" "repo" "'"$hash"'"; clear_synced_hash "peer1" "repo"; get_synced_hash "peer1" "repo"'
+    run bash -c 'source scripts/sync-lib.sh; set_synced_hash "peer1" "repo" "'"$hash"'"; clear_synced_hash "peer1" "repo"; get_synced_hash "peer1" "repo"'
     [ -z "$output" ]
 }
 
@@ -101,25 +101,25 @@ _commit_empty() {
     abs_dir=$(cd "$DATA_DIR" && pwd)
     local hash
     hash=$(printf '%s' "$abs_dir" | sha256sum | awk '{print $1}' | head -c16)
-    run bash -c 'source scripts/sync-state.sh; sync_state_file_for_peer "peer1"'
+    run bash -c 'source scripts/sync-lib.sh; sync_state_file_for_peer "peer1"'
     [ "$output" = "/dev/shm/mtls-hello-sync/$hash/sync-state/peer1.txt" ]
 }
 
 @test "helpers fall back gracefully when DATA_DIR is unset" {
-    run bash -c 'unset DATA_DIR; source scripts/sync-state.sh; sync_state_dir; sync_state_file_for_peer "peer1"; compute_refs_hash "$REPO_DIR"'
+    run bash -c 'unset DATA_DIR; source scripts/sync-lib.sh; sync_state_dir; sync_state_file_for_peer "peer1"; compute_refs_hash "$REPO_DIR"'
     [ "$status" -eq 0 ]
 }
 
 @test "skip condition matches when hash is unchanged" {
     _commit_empty "$REPO_DIR" "init"
-    run bash -c 'source scripts/sync-state.sh; h=$(compute_refs_hash "$REPO_DIR"); set_synced_hash "peer1" "repo" "$h"; [ "$(compute_refs_hash "$REPO_DIR")" = "$(get_synced_hash "peer1" "repo")" ]'
+    run bash -c 'source scripts/sync-lib.sh; h=$(compute_refs_hash "$REPO_DIR"); set_synced_hash "peer1" "repo" "$h"; [ "$(compute_refs_hash "$REPO_DIR")" = "$(get_synced_hash "peer1" "repo")" ]'
     [ "$status" -eq 0 ]
 }
 
 @test "skip condition does not match after new commit" {
     _commit_empty "$REPO_DIR" "init"
-    run bash -c 'source scripts/sync-state.sh; h=$(compute_refs_hash "$REPO_DIR"); set_synced_hash "peer1" "repo" "$h"'
+    run bash -c 'source scripts/sync-lib.sh; h=$(compute_refs_hash "$REPO_DIR"); set_synced_hash "peer1" "repo" "$h"'
     _commit_empty "$REPO_DIR" "second"
-    run bash -c 'source scripts/sync-state.sh; [ "$(compute_refs_hash "$REPO_DIR")" != "$(get_synced_hash "peer1" "repo")" ]'
+    run bash -c 'source scripts/sync-lib.sh; [ "$(compute_refs_hash "$REPO_DIR")" != "$(get_synced_hash "peer1" "repo")" ]'
     [ "$status" -eq 0 ]
 }

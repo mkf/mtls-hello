@@ -210,7 +210,7 @@ start_server() {
   mkdir -p "$APACHE_DD/handlers" "$APACHE_DD/scripts" "$APACHE_DD/repos"
 
   # Copy CGI helpers.
-  cp scripts/cgi-trust.sh scripts/cgi-common.sh scripts/log-capture.sh "$APACHE_DD/scripts/"
+  cp scripts/cgi-lib.sh scripts/log-capture.sh "$APACHE_DD/scripts/"
 
   # Copy handlers, respecting --handlers-dir if the test passed it.
   local handlers_dir="handlers"

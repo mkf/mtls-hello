@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/cleanup-common.sh
 . scripts/cleanup-common.sh
 
-. scripts/sync-common.sh 2>/dev/null || true
+. scripts/sync-lib.sh 2>/dev/null || true
 
 : "${REPOS_ROOT:?REPOS_ROOT must be set}"
 

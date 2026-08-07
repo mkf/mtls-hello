@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-DATA_DIR="${DATA_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}/../../../..}"
+DATA_DIR="${DATA_DIR:-$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 LOG="$DATA_DIR/discoveries.log"
 
 ts="$(date -Iseconds)"

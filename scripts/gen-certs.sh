@@ -54,7 +54,21 @@ CN_FN="$(printf '%s' "$CN" | tr -c 'A-Za-z0-9._-' '_')"
 
 command -v openssl >/dev/null || { echo "gen-certs.sh: openssl not on PATH" >&2; exit 1; }
 command -v xxd >/dev/null || { echo "gen-certs.sh: xxd not on PATH (needed to read raw bytes)" >&2; exit 1; }
-command -v blake2b >/dev/null || { echo "gen-certs.sh: blake2b not on PATH (BLAKE2b-256 for NNCP id)" >&2; exit 1; }
+# BLAKE2b-256 32-byte digest for the NNCP id. Prefer the standalone `blake2b`
+# binary when present; fall back to coreutils' `b2sum -l 32` on hosts
+# (e.g. Tumbleweed-Slowroll) that don't ship `blake2b`. Both produce the
+# exact same 32-byte BLAKE2b-256 digest per RFC 7693.
+if command -v blake2b >/dev/null 2>&1; then
+    blake2b_32() { blake2b -l 32; }
+elif command -v b2sum >/dev/null 2>&1; then
+    # b2sum's -l is in BITS (256 = 32 bytes); output is hex text, so we
+    # cut the hash field and convert hex→raw to match standalone blake2b's
+    # raw-byte output.
+    blake2b_32() { b2sum -l 256 | cut -d' ' -f1 | xxd -r -p; }
+else
+    echo "gen-certs.sh: no BLAKE2b binary on PATH (need blake2b or b2sum)" >&2
+    exit 1
+fi
 
 IDENT_DIR="$DATA_DIR/identity"
 mkdir -p "$IDENT_DIR"
@@ -105,8 +119,9 @@ STRICT_LEN=64
 [ ${#NOISE_PRV_HEX}  -eq $STRICT_LEN ] || { echo "gen-certs.sh: noiseprv extraction failed (got ${#NOISE_PRV_HEX} hex chars)" >&2; exit 1; }
 [ ${#NOISE_PUB_HEX} -eq $STRICT_LEN ] || { echo "gen-certs.sh: noisepub extraction failed (got ${#NOISE_PUB_HEX} hex chars)" >&2; exit 1; }
 
-# Compute NNCP id = BLAKE2b-256 of signpub (32-byte digest).
-NNCP_ID="$(printf '%s' "$SIGN_PUB_HEX" | xxd -r -p | blake2b -l 32 | base32 -w 0)"
+# Compute NNCP id = BLAKE2b-256 of signpub (32-byte digest), via the `blake2b_32`
+# helper resolved above (blake2b on CI, b2sum on Tumbleweed-Slowroll).
+NNCP_ID="$(printf '%s' "$SIGN_PUB_HEX" | xxd -r -p | blake2b_32 | base32 -w 0)"
 
 # Build the NNCP raw key block as base32-32 / base32-64 strings (RFC 4648 no padding).
 hex_to_b32() { printf '%s' "$1" | xxd -r -p | base32 -w 0; }

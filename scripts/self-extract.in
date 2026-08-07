@@ -63,9 +63,11 @@ do_install() {
     cp -p "$_SE_PAYLOAD_DIR/share/mtls-hello/handlers/"*.sh "$dst_share/handlers/"
 
     # Refresh scripts: remove the known shipped scripts (never user hooks), then copy.
-    for s in on-discover.sh sync-common.sh trust-host.sh merge-spool.sh \
-             cgi-trust.sh log-capture.sh cgi-common.sh apache-config.sh \
-             migrate-layout.sh sync-state.sh pre-push.sh.new; do
+    for s in on-discover.sh sync-common.sh sync-state.sh sync-lib.sh \
+             trust-host.sh merge-spool.sh \
+             cgi-lib.sh log-capture.sh cgi-trust.sh cgi-common.sh \
+             apache-config.sh migrate-layout.sh \
+             pre-push.sh.new; do
         remove_file_safe "$dst_share/scripts/$s"
     done
     cp -p "$_SE_PAYLOAD_DIR/share/mtls-hello/scripts/"* "$dst_share/scripts/"

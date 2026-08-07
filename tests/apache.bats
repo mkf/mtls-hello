@@ -66,7 +66,7 @@ _start_apache() {
     APACHE_DD="$(mktemp -d)"
     mkdir -p "$APACHE_DD/handlers" "$APACHE_DD/hosts" "$APACHE_DD/purgatory" "$APACHE_DD/scripts"
     cp "handlers/$handler" "$APACHE_DD/handlers/"
-    cp scripts/cgi-trust.sh scripts/log-capture.sh "$APACHE_DD/scripts/"
+    cp scripts/cgi-lib.sh scripts/log-capture.sh "$APACHE_DD/scripts/"
     chmod +x "$APACHE_DD/handlers/$handler"
     bash scripts/apache-config.sh "$APACHE_DD" "$port" \
         "$cert_dir/server.crt" "$cert_dir/server.key" "$APACHE_DD/apache/httpd.conf"

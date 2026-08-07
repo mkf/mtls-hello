@@ -16,19 +16,10 @@
 set -euo pipefail
 
 # shellcheck disable=SC1091
-. "${MTLS_DATA_DIR}/scripts/cgi-common.sh"
-# shellcheck disable=SC1091
-. "${MTLS_DATA_DIR}/scripts/cgi-trust.sh"
+. "${MTLS_DATA_DIR}/scripts/cgi-lib.sh"
 
 # --- trust gate -------------------------------------------------------
-
-cert="${SSL_CLIENT_CERT:-}"
-if [ -z "$cert" ]; then
-    cgi_error "401 Unauthorized" "No client certificate presented"
-fi
-if ! is_trusted; then
-    cgi_error "401 Unauthorized" "Untrusted"
-fi
+cgi_require_trusted
 
 # --- CN / URL-prefix enforcement --------------------------------------
 
@@ -52,11 +43,7 @@ if [ -z "$url_cn" ]; then
 fi
 if [ "$url_cn" != "$cn" ]; then
     # Cross-host access: trusted but wrong prefix.
-    echo "Status: 403 Forbidden"
-    echo "Content-Type: text/plain"
-    echo ""
-    echo "cross-host access denied"
-    exit 0
+    cgi_error "403 Forbidden" "cross-host access denied"
 fi
 
 # --- forward to loopback mod_dav VH ----------------------------------

@@ -72,6 +72,18 @@ package-debian:
 package-arch:
     bash scripts/package-arch.sh
 
+# build an Arch Linux ARM armv7h .pkg.tar.zst package (cross-compiled for
+# Raspberry Pi 3 Model B v1.2). Runs in a Docker container invoked from
+# docker/Dockerfile.arch-rpi3, which uses makepkg -s to auto-install
+# makedepends declared in docker/pkgbuilds/mtls-hello.PKGBUILD.
+package-arch-arm-rpi3:
+    docker build -f docker/Dockerfile.arch-rpi3 -t localhost/mtls-hello-arm-rpi3-build .
+    mkdir -p dist
+    docker run --rm \
+        -v "$(CURDIR):/src:ro" \
+        -v "$(CURDIR)/dist:/out" \
+        localhost/mtls-hello-arm-rpi3-build
+
 # detect distro and build the native package (Debian or Arch)
 package:
     bash scripts/package.sh

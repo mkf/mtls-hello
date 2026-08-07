@@ -25,26 +25,13 @@
 
 set -euo pipefail
 
-DATA_DIR="${MTLS_DATA_DIR:-}"
-TRUST_DIR="${MTLS_TRUST_DIR:-}"
-
-if [ -z "$DATA_DIR" ] || [ ! -d "$DATA_DIR" ]; then
-    DATA_DIR="${HOME}/.local/share/mtls-hello"
-fi
-if [ -z "$TRUST_DIR" ] || [ ! -d "$TRUST_DIR" ]; then
-    TRUST_DIR="$DATA_DIR/hosts"
-fi
-
 # Source shared helpers. Use known locations: prefer project-local <repo>/scripts,
 # then user's install-prefix; both modes supported for BATS unit-test callers.
+DATA_DIR="$(data_dir_resolve)"
+TRUST_DIR="${MTLS_TRUST_DIR:-$DATA_DIR/hosts}"
 SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-for d in "$PROJECT_ROOT/scripts" "$DATA_DIR/scripts"; do
-    [ -r "$d/cgi-trust.sh" ]   && . "$d/cgi-trust.sh"   && [ -r "$d/cgi-trust.sh" ]   && break
-done >/dev/null 2>&1 || true
-# Re-source explicitly so we definitely pick them up.
-. "$DATA_DIR/scripts/cgi-trust.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cgi-trust.sh"
-. "$DATA_DIR/scripts/cgi-common.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cgi-common.sh"
+. "$DATA_DIR/scripts/cgi-lib.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cgi-lib.sh"
 . "$DATA_DIR/scripts/cleanup-common.sh" 2>/dev/null || . "$PROJECT_ROOT/scripts/cleanup-common.sh"
 
 # Trust gate: per-host mTLS fingerprint match (feature 023 mechanism).

@@ -1,0 +1,109 @@
+# docker/Dockerfile.arch-rpi3
+#
+# Cross-compile container for mtls-hello targeting Arch Linux ARM (armv7h,
+# hard-float EABI5) on Raspberry Pi 3 Model B v1.2 (BCM2837, Cortex-A53).
+# Built FROM ubuntu:24.04 so apt's ARM cross-libraries stack
+# (`libc6-dev-armhf-cross` + `libstdc++-12-dev-armhf-cross`) is on the
+# table after the Bootlin toolchain binaries are extracted — we install
+# only the LDC/D runtime, then drive cross-compile from dub.
+#
+# Why this particular base + Bootlin:
+#   In mid-2026 there is no Docker image that ships
+#   `/usr/bin/arm-linux-gnueabihf-gcc` for armv7h hard-float out of the
+#   box (dockcross uses a non-standard `armv7-unknown-linux-gnueabi/`
+#   triplet; archlinux:latest has never carried [multilib]; archlinuxarm
+#   packages are ARM-host packages and do not include x86_64 cross
+#   compilers). Bootlin's prebuilt
+#   `armv7-eabihf--glibc--stable-2025.08-1.tar.xz` extracted under
+#   /opt/&lt;toolchain&gt;/arm-buildroot-linux-gnueabihf/bin/ + /sysroot/ is
+#   the working pattern. See research.md Q2.
+#
+# Tarball layout (verified by `tar -tJf` locally on 2026-08-07):
+#
+#   armv7-eabihf--glibc--stable-2025.08-1/
+#   └── arm-buildroot-linux-gnueabihf/
+#       ├── bin/arm-linux-gnueabihf-{gcc,g++,ld,as,objcopy,strip,...}
+#       └── sysroot/   ← target sysroot (libc, headers, openssl/libs)
+#   └── share/...
+#
+# So `${BOOTLIN_PATH}/bin/...` is wrong; it must be
+# `${BOOTLIN_PATH}/arm-buildroot-linux-gnueabihf/bin/...`
+#
+# Privacy: the image tag is `localhost/mtls-hello-arm-rpi3-build`. Docker's
+# default-registry prefix does NOT resolve to docker.io under any
+# circumstance; an explicit `docker tag` onto a real registry hostname is
+# the only way to publish.
+#
+# Mount points (set by the justfile `package-arch-arm-rpi3` recipe):
+#   /src  — host's repo root, RO   (the source tree, `dub build` reads it)
+#   /out  — host's `dist/`,    RW  (the .pkg.tar.zst artefact lands here)
+#
+# Per project safety rule G1 (and the runtime guardrail that forbids
+# `rm -rf`/`rm -f`/`rm -r`/`find -delete`): every cleanup uses anchored
+# `rm -- file` + `rmdir -- empty-dir`. We never call `rm -rf`.
+#
+# Cited references (research.md Q2 + Q4 — mid-2026):
+#   * Bootlin armv7-eabihf toolchain release index:
+#       https://toolchains.bootlin.com/releases_armv7-eabihf.html
+#   * Bootlin 2025.08 release blog (GCC 14.3, glibc 2.41):
+#       https://bootlin.com/blog/bootlin-toolchains-2025-08-released/
+#   * Relative-path CMD bug (the dominant cause of prior failed builds):
+#       https://docs.docker.com/reference/dockerfile/#workdir
+
+FROM ubuntu:24.04
+
+WORKDIR /build
+
+# ── Host runtime deps (no host-target toolchain — Bootlin supplies that) ──
+# We install *only* what dub+ldc need at runtime on the *build* host:
+#   curl × ca-certificates × xz-utils — pull + extract the Bootlin tarball
+#   ldc   × dub                — cross-drive the D compilation
+# We deliberately do NOT install host gcc/g++/cmake/cpio/bzip2. The
+# build host only orchestrates; the cross-toolchain does the compiling.
+# G1: cleanup is anchored `rm --` of the caching files we list by name,
+# not `rm -rf /var/lib/apt/lists/*` (research example substituted).
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        curl ca-certificates xz-utils ldc dub zstd \
+ && rm -- /var/lib/apt/lists/lock \
+ && rm -- /var/lib/apt/lists/auxfiles \
+ && rmdir -- /var/lib/apt/lists/partial 2>/dev/null || true
+
+# ── Bootlin armv7-eabihf prebuilt cross-toolchain ────────────────────────
+# Download the 2025.08-1 release. The tarball extracts to
+# /opt/armv7-eabihf--glibc--stable-2025.08-1/, with the actual cross
+# binaries one extra directory deeper:
+#   /opt/<toolchain>/arm-buildroot-linux-gnueabihf/bin/arm-linux-gnueabihf-{gcc,g++,ld,as,objcopy,strip,...}
+# Bootlin's triplet naming is `arm-linux-gnueabihf-` (matches FR-007 in
+# spec 027 line 1 "arm-linux-gnueabihf-*") exactly.
+# G1: cleanup of /tmp/tc.tar.xz is plain anchored `rm -- /tmp/tc.tar.xz`.
+ENV BOOTLIN_URL=https://toolchains.bootlin.com/downloads/releases/toolchains/armv7-eabihf/tarballs/armv7-eabihf--glibc--stable-2025.08-1.tar.xz
+ENV BOOTLIN_PATH=/opt/armv7-eabihf--glibc--stable-2025.08-1
+ENV BOOTLIN_BIN=/opt/armv7-eabihf--glibc--stable-2025.08-1/arm-buildroot-linux-gnueabihf/bin
+ENV PATH=/opt/armv7-eabihf--glibc--stable-2025.08-1/arm-buildroot-linux-gnueabihf/bin:$PATH
+
+RUN curl -fsSL --retry 3 -o /tmp/tc.tar.xz "${BOOTLIN_URL}"
+RUN tar -xJf /tmp/tc.tar.xz -C /opt
+RUN test -x "${BOOTLIN_BIN}/arm-linux-gnueabihf-gcc"
+RUN "${BOOTLIN_BIN}/arm-linux-gnueabihf-gcc" --version
+RUN rm -- /tmp/tc.tar.xz
+
+# ── Build artefacts cross-compile + stage + tar|zstd under
+#    scripts/package-arch-rpi3.sh (the CMD entrypoint). ───────────────────
+# The CMD chain:
+#   1. cp -a /src/. /build/src   — copy host RO mount to RW working dir
+#   2. cd /build/src              — critical fix for "scripts/foo.sh" —
+#                                   the relative-path bug documented in
+#                                   research.md Q4. Without this `cd`,
+#                                   bash interprets `scripts/foo.sh` as
+#                                   `/scripts/foo.sh` and fails with
+#                                   "No such file or directory".
+#   3. cross-compile + stage + .PKGINFO + .INSTALL + tar|zstd
+# JSON-array CMD form (a single shell with line continuations).
+CMD ["/bin/bash", "-c", "set -euo pipefail; \
+  cp -a /src/. /build/src; \
+  cd /build/src; \
+  export DFLAGS='-target=armv7-unknown-linux-gnueabihf'; \
+  export DUB_FLAGS='--DFLAGS=-target=armv7-unknown-linux-gnueabihf'; \
+  bash scripts/package-arch-rpi3.sh"]

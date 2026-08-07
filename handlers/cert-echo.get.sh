@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Source shared CGI helpers from the project data directory.
 # shellcheck disable=SC1091
-source "${MTLS_DATA_DIR}/scripts/cgi-trust.sh"
+source "${MTLS_DATA_DIR}/scripts/cgi-lib.sh"
 
 cert="${SSL_CLIENT_CERT:-}"
 hostname="$(cgi_client_hostname)"
